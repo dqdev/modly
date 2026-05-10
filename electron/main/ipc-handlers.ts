@@ -723,6 +723,7 @@ export function setupIpcHandlers(pythonBridge: PythonBridge, getWindow: WindowGe
       const destDir = join(extensionsDir, manifest.id)
 
       if (existsSync(destDir)) {
+        terminateProcessRunner(manifest.id)
         await rmAsync(destDir, { recursive: true, force: true })
       }
       await cp(extractDir, destDir, { recursive: true })
@@ -865,6 +866,7 @@ export function setupIpcHandlers(pythonBridge: PythonBridge, getWindow: WindowGe
 
   // Trigger Python extension reload (without touching the filesystem)
   ipcMain.handle('extensions:reload', async () => {
+    terminateAllProcessRunners()
     try {
       const res = await axios.post(`${API_BASE_URL}/extensions/reload`, {}, { timeout: 10_000 })
       return { success: true, errors: (res.data as { errors?: Record<string, string> }).errors ?? {} }
