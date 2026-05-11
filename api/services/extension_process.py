@@ -127,6 +127,7 @@ class ExtensionProcess:
                 return
 
             self._proc.kill()
+            self._proc.wait()
             missing_module = self._extract_missing_module(msg)
             package_name = self._resolve_auto_repair_package(missing_module) if missing_module else None
             if package_name and attempt < 2:
