@@ -91,7 +91,7 @@ python tools/modly-cli/agent.py generate \
 }
 ```
 
-Use `--no-export` when the caller only needs the workspace path. Use `export` to download an existing workspace mesh:
+Use `--no-export` when the caller only needs the workspace path. The hidden `export` helper remains available to download an existing workspace mesh, but it is not part of the canonical root command set:
 
 ```bash
 python tools/modly-cli/agent.py export --path Default/model.glb --output ./model.glb
@@ -153,14 +153,20 @@ python tools/modly-cli/agent.py experimental comfy-image \
   --comfy-output ./source.png
 
 python tools/modly-cli/agent.py experimental generate-from-workflow \
-  --workflow Trellis2Workflow \
+  --workflow Trellis2-Full \
   --prompt "clean orthographic product render of a stylized robot toy" \
   --output ./export.glb
 ```
 
+`experimental generate-from-workflow --workflow <name> --output <path>` treats `--output` as the final artifact location. If the ComfyUI history contains a downloadable `.glb`, `.gltf`, `.obj`, `.stl`, or `.ply`, the CLI downloads that asset directly and does not call Modly health or generation. If the workflow only produces an image, the CLI downloads that image and falls back through the canonical Modly workflow-run generation path. If no supported asset or image is found, it fails with `code: "NO_WORKFLOW_OUTPUT"`.
+
+## Hidden Helper Aliases
+
+The top-level `status`, `export`, and `batch` helpers remain parseable for older scripts and agent ergonomics, but root help does not present them as canonical automation primitives. Prefer `health`, `model`, `workflow-run`, `capability`, and `process-run` when documenting the supported contract.
+
 ## Batch Workflow
 
-Generate meshes sequentially from a directory or manifest JSON:
+The hidden `batch` helper generates meshes sequentially from a directory or manifest JSON through the canonical `generate` path:
 
 ```bash
 python tools/modly-cli/agent.py batch \

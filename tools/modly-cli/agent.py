@@ -26,6 +26,7 @@ DEFAULT_TIMEOUT_SECONDS = int(os.environ.get("MODLY_CLI_TIMEOUT", os.environ.get
 DEFAULT_POLL_SECONDS = float(os.environ.get("MODLY_CLI_POLL_SECONDS", os.environ.get("MODLY_AGENT_POLL_SECONDS", "2")))
 EXPORT_FORMATS = ("glb", "stl", "obj", "ply")
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+WORKFLOW_ASSET_SUFFIXES = {".glb", ".gltf", ".obj", ".stl", ".ply"}
 
 
 class ModlyCliError(RuntimeError):
@@ -499,7 +500,7 @@ def _patch_comfy_workflow(workflow: dict[str, Any], *, prompt: str | None, seed:
     return nodes
 
 
-def _run_comfy_image(args: argparse.Namespace) -> dict[str, Any]:
+def _run_comfy_workflow(args: argparse.Namespace) -> dict[str, Any]:
     host = args.comfy_url.rstrip("/")
     workflow = _load_comfy_workflow(args.workflow, host=host, timeout=args.request_timeout)
     prompt = getattr(args, "prompt", None)
@@ -522,33 +523,87 @@ def _run_comfy_image(args: argparse.Namespace) -> dict[str, Any]:
             print(json.dumps({"phase": "comfy", "prompt_id": prompt_id, "status": "running"}), file=sys.stderr)
         time.sleep(args.poll)
     if not history:
-        raise ModlyCliError(f"Timed out waiting for ComfyUI prompt {prompt_id}")
+        raise ModlyCliError(f"Timed out waiting for ComfyUI prompt {prompt_id}", code="TIMEOUT")
 
-    outputs = history.get("outputs") if isinstance(history.get("outputs"), dict) else {}
-    image_ref = None
-    for node_output in outputs.values():
-        if isinstance(node_output, dict) and node_output.get("images"):
-            images = node_output.get("images")
-            if isinstance(images, list) and images and isinstance(images[0], dict):
-                image_ref = images[0]
-                break
+    return {"ok": True, "comfy_url": host, "workflow": args.workflow, "prompt_id": str(prompt_id), "history": history}
+
+
+def _iter_comfy_file_refs(value: Any) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        filename = value.get("filename")
+        if isinstance(filename, str) and filename:
+            refs.append(value)
+        for child in value.values():
+            refs.extend(_iter_comfy_file_refs(child))
+    elif isinstance(value, list):
+        for child in value:
+            refs.extend(_iter_comfy_file_refs(child))
+    return refs
+
+
+def _comfy_ref_suffix(ref: dict[str, Any]) -> str:
+    filename = str(ref.get("filename") or "")
+    return Path(urllib.parse.urlparse(filename).path).suffix.lower()
+
+
+def _find_comfy_file_ref(history: dict[str, Any], suffixes: set[str]) -> dict[str, Any] | None:
+    outputs = history.get("outputs") if isinstance(history.get("outputs"), dict) else history
+    for ref in _iter_comfy_file_refs(outputs):
+        if _comfy_ref_suffix(ref) in suffixes:
+            return ref
+    return None
+
+
+def _comfy_view_url(host: str, ref: dict[str, Any]) -> str:
+    query = urllib.parse.urlencode({
+        "filename": ref.get("filename", ""),
+        "subfolder": ref.get("subfolder", ""),
+        "type": ref.get("type", "output"),
+    })
+    return f"{host.rstrip('/')}/view?{query}"
+
+
+def _download_comfy_ref(host: str, ref: dict[str, Any], dest: Path, *, timeout: float) -> int:
+    return _download(_comfy_view_url(host, ref), dest, timeout=timeout)
+
+
+def _temp_path_for_comfy_ref(ref: dict[str, Any], *, default_suffix: str) -> Path:
+    suffix = _comfy_ref_suffix(ref) or default_suffix
+    tmp = tempfile.NamedTemporaryFile(delete=False, prefix="modly-comfy-", suffix=suffix)
+    tmp.close()
+    return Path(tmp.name)
+
+
+def _download_comfy_image_output(args: argparse.Namespace, comfy: dict[str, Any]) -> dict[str, Any]:
+    host = str(comfy["comfy_url"])
+    prompt_id = str(comfy["prompt_id"])
+    history = comfy["history"] if isinstance(comfy.get("history"), dict) else {}
+
+    image_ref = _find_comfy_file_ref(history, IMAGE_SUFFIXES)
     if not image_ref:
-        raise ModlyCliError(f"ComfyUI prompt {prompt_id} completed without an image output")
+        raise ModlyCliError(f"ComfyUI prompt {prompt_id} completed without a supported image output", code="NO_WORKFLOW_OUTPUT")
 
     out_path: Path | None = getattr(args, "comfy_output", None)
     if out_path:
         out = Path(out_path).expanduser().resolve()
     else:
-        tmp = tempfile.NamedTemporaryFile(delete=False, prefix="modly-comfy-", suffix=".png")
-        tmp.close()
-        out = Path(tmp.name)
-    query = urllib.parse.urlencode({
-        "filename": image_ref.get("filename", ""),
-        "subfolder": image_ref.get("subfolder", ""),
-        "type": image_ref.get("type", "output"),
-    })
-    bytes_written = _download(f"{host}/view?{query}", out, timeout=args.request_timeout)
-    return {"ok": True, "comfy_url": host, "workflow": args.workflow, "prompt_id": str(prompt_id), "image_path": str(out), "bytes_written": bytes_written, "image": image_ref}
+        out = _temp_path_for_comfy_ref(image_ref, default_suffix=".png")
+    bytes_written = _download_comfy_ref(host, image_ref, out, timeout=args.request_timeout)
+    return {
+        "ok": True,
+        "comfy_url": host,
+        "workflow": comfy["workflow"],
+        "prompt_id": prompt_id,
+        "image_path": str(out),
+        "bytes_written": bytes_written,
+        "image": image_ref,
+    }
+
+
+def _run_comfy_image(args: argparse.Namespace) -> dict[str, Any]:
+    comfy = _run_comfy_workflow(args)
+    return _download_comfy_image_output(args, comfy)
 
 
 def cmd_comfy_image(args: argparse.Namespace) -> int:
@@ -559,12 +614,37 @@ def cmd_comfy_image(args: argparse.Namespace) -> int:
 
 
 def cmd_generate_from_workflow(args: argparse.Namespace) -> int:
+    comfy = _run_comfy_workflow(args)
+    host = str(comfy["comfy_url"])
+    prompt_id = str(comfy["prompt_id"])
+    history = comfy["history"] if isinstance(comfy.get("history"), dict) else {}
+    asset_ref = _find_comfy_file_ref(history, WORKFLOW_ASSET_SUFFIXES)
+    if asset_ref:
+        if not args.output:
+            raise ModlyCliError("--output is required when a workflow produces a direct 3D asset", code="OUTPUT_REQUIRED")
+        export_dest = Path(args.output).expanduser().resolve()
+        bytes_written = _download_comfy_ref(host, asset_ref, export_dest, timeout=args.request_timeout)
+        _json_print({
+            "ok": True,
+            "source": "comfy-workflow",
+            "output_type": "asset",
+            "export_path": str(export_dest),
+            "bytes_written": bytes_written,
+            "workflow": comfy["workflow"],
+            "prompt_id": prompt_id,
+            "comfy_url": host,
+            "asset": asset_ref,
+            "meta": {"experimental": True, "canonical": False},
+        }, compact=args.compact)
+        return 0
+
+    comfy_image = _download_comfy_image_output(args, comfy)
     _require_health(args.base_url.rstrip("/"), args.request_timeout)
-    comfy = _run_comfy_image(args)
     output = Path(args.output).expanduser().resolve() if args.output else None
-    result = _generate_one(args, Path(str(comfy["image_path"])), output)
+    result = _generate_one(args, Path(str(comfy_image["image_path"])), output)
     result["source"] = "comfy-workflow"
-    result["comfy"] = comfy
+    result["output_type"] = "image"
+    result["comfy"] = comfy_image
     result.setdefault("meta", {})["experimental"] = True
     _json_print(result, compact=args.compact)
     return 0
@@ -1068,13 +1148,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--request-timeout", type=float, default=30, help="Per-request timeout in seconds (default: 30)")
     parser.add_argument("--compact", action="store_true", help="Print compact one-line JSON")
     parser.add_argument("--quiet", action="store_true", help="Suppress progress output; final JSON is still printed")
-    canonical_commands = "{health,status,model,workflow-run,capability,process-run,generate,export,batch,dev,experimental,legacy}"
+    canonical_commands = "{health,model,workflow-run,capability,process-run,generate,dev,experimental,legacy}"
     sub = parser.add_subparsers(dest="command", required=True, metavar=canonical_commands)
 
     health = sub.add_parser("health", help="Check that Modly's local API is reachable")
     health.set_defaults(func=cmd_health)
 
-    status = sub.add_parser("status", help="Show API health and active model status")
+    status = sub.add_parser("status", help=argparse.SUPPRESS)
     status.set_defaults(func=cmd_status)
 
     model = sub.add_parser("model", help="Inspect canonical model state")
@@ -1123,13 +1203,13 @@ def build_parser() -> argparse.ArgumentParser:
     _add_generation_options(gen, image=True, output=True)
     gen.set_defaults(func=cmd_generate)
 
-    exp = sub.add_parser("export", help="Export an existing workspace mesh path")
+    exp = sub.add_parser("export", help=argparse.SUPPRESS)
     exp.add_argument("--path", required=True, help="Workspace-relative mesh path, e.g. Agent/foo.glb")
     exp.add_argument("--output", required=True, help="Destination file path")
     exp.add_argument("--format", choices=EXPORT_FORMATS, default="glb", help="Export format (default: glb)")
     exp.set_defaults(func=cmd_export)
 
-    batch = sub.add_parser("batch", help="Generate meshes sequentially from an image directory or manifest JSON")
+    batch = sub.add_parser("batch", help=argparse.SUPPRESS)
     group = batch.add_mutually_exclusive_group(required=True)
     group.add_argument("--input-dir", help="Directory of .png/.jpg/.jpeg/.webp images")
     group.add_argument("--manifest", help="JSON list or object with jobs/images entries")
@@ -1155,7 +1235,7 @@ def build_parser() -> argparse.ArgumentParser:
     comfy.add_argument("--poll", type=float, default=DEFAULT_POLL_SECONDS, help=f"Polling interval in seconds (default: {DEFAULT_POLL_SECONDS})")
     comfy.add_argument("--progress", action="store_true", help="Emit progress JSON lines to stderr while waiting")
     comfy.set_defaults(func=cmd_comfy_image)
-    wf = experimental_sub.add_parser("generate-from-workflow", help="Run a ComfyUI workflow, feed its image output into Modly, and export the mesh")
+    wf = experimental_sub.add_parser("generate-from-workflow", help="Run a ComfyUI workflow and save or convert its output")
     _add_comfy_options(wf)
     _add_generation_options(wf, image=False, output=True)
     wf.set_defaults(func=cmd_generate_from_workflow)
@@ -1200,7 +1280,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_comfy_options(wf_alias)
     _add_generation_options(wf_alias, image=False, output=True)
     wf_alias.set_defaults(func=cmd_generate_from_workflow)
-    hidden = {"models", "params", "job", "cancel", "serve", "ensure-server", "comfy-image", "generate-from-workflow"}
+    hidden = {"status", "export", "batch", "models", "params", "job", "cancel", "serve", "ensure-server", "comfy-image", "generate-from-workflow"}
     sub._choices_actions = [choice for choice in sub._choices_actions if getattr(choice, "dest", None) not in hidden]
     return parser
 

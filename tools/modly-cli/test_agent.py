@@ -194,14 +194,95 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(cap_ctx.exception.code, "UNSUPPORTED_PROCESS")
         self.assertEqual(proc_ctx.exception.code, "UNSUPPORTED_PROCESS")
 
-    def test_generate_from_workflow_checks_modly_health_before_comfy(self) -> None:
-        args = SimpleNamespace(base_url="http://example.test", request_timeout=1, compact=True, output=None)
-        with patch.object(agent, "_request_json", side_effect=agent.ModlyCliError("down", code="API_UNAVAILABLE")) as request:
-            with patch.object(agent, "_run_comfy_image", side_effect=AssertionError("ComfyUI should not run before Modly health")) as comfy:
-                with self.assertRaises(agent.ModlyCliError):
-                    agent.cmd_generate_from_workflow(args)
-        self.assertEqual(request.call_args.args[:2], ("GET", "http://example.test/health"))
-        comfy.assert_not_called()
+    def test_generate_from_workflow_downloads_direct_asset_without_modly_health(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "robot.glb"
+            history = {
+                "outputs": {
+                    "9": {
+                        "meshes": [
+                            {"filename": "robot.glb", "subfolder": "trellis", "type": "output"},
+                        ]
+                    }
+                }
+            }
+            args = SimpleNamespace(
+                base_url="http://modly.test",
+                request_timeout=1,
+                compact=True,
+                output=str(output),
+                workflow="Trellis2-Full",
+            )
+
+            with (
+                patch.object(agent, "_run_comfy_workflow", return_value={"ok": True, "comfy_url": "http://comfy.test", "workflow": "Trellis2-Full", "prompt_id": "prompt-1", "history": history}),
+                patch.object(agent, "_download", return_value=789) as download,
+                patch.object(agent, "_require_health", side_effect=AssertionError("Modly health should not run for direct asset output")),
+                patch.object(agent, "_generate_one", side_effect=AssertionError("Modly generation should not run for direct asset output")),
+                redirect_stdout(io.StringIO()) as buf,
+            ):
+                self.assertEqual(agent.cmd_generate_from_workflow(args), 0)
+
+            payload = json.loads(buf.getvalue())
+            self.assertEqual(payload["source"], "comfy-workflow")
+            self.assertEqual(payload["output_type"], "asset")
+            self.assertEqual(payload["export_path"], str(output.resolve()))
+            self.assertEqual(payload["bytes_written"], 789)
+            self.assertEqual(payload["workflow"], "Trellis2-Full")
+            self.assertEqual(payload["prompt_id"], "prompt-1")
+            self.assertTrue(payload["meta"]["experimental"])
+            download.assert_called_once()
+            self.assertIn("/view?", download.call_args.args[0])
+            self.assertIn("filename=robot.glb", download.call_args.args[0])
+
+    def test_generate_from_workflow_falls_back_to_modly_for_image_only_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "robot.glb"
+            history = {
+                "outputs": {
+                    "3": {
+                        "images": [
+                            {"filename": "source.png", "subfolder": "", "type": "output"},
+                        ]
+                    }
+                }
+            }
+            args = SimpleNamespace(
+                base_url="http://modly.test",
+                request_timeout=1,
+                compact=True,
+                output=str(output),
+                workflow="Trellis2-Full",
+            )
+
+            def fake_generate(_args: object, image_path: Path, output_path: Path | None) -> dict[str, object]:
+                self.assertTrue(str(image_path).endswith(".png"))
+                self.assertEqual(output_path, output.resolve())
+                return {"ok": True, "run": {"kind": "workflowRun", "id": "run-1"}, "meta": {"legacy": False}}
+
+            with (
+                patch.object(agent, "_run_comfy_workflow", return_value={"ok": True, "comfy_url": "http://comfy.test", "workflow": "Trellis2-Full", "prompt_id": "prompt-1", "history": history}),
+                patch.object(agent, "_download", return_value=123),
+                patch.object(agent, "_require_health", return_value={"status": "ok"}) as health,
+                patch.object(agent, "_generate_one", fake_generate),
+                redirect_stdout(io.StringIO()) as buf,
+            ):
+                self.assertEqual(agent.cmd_generate_from_workflow(args), 0)
+
+            payload = json.loads(buf.getvalue())
+            self.assertEqual(payload["source"], "comfy-workflow")
+            self.assertEqual(payload["output_type"], "image")
+            self.assertEqual(payload["comfy"]["prompt_id"], "prompt-1")
+            self.assertTrue(payload["meta"]["experimental"])
+            health.assert_called_once_with("http://modly.test", 1)
+
+    def test_generate_from_workflow_fails_when_history_has_no_supported_output(self) -> None:
+        args = SimpleNamespace(base_url="http://modly.test", request_timeout=1, compact=True, output="robot.glb", workflow="Trellis2-Full")
+        history = {"outputs": {"4": {"text": ["done"]}}}
+        with patch.object(agent, "_run_comfy_workflow", return_value={"ok": True, "comfy_url": "http://comfy.test", "workflow": "Trellis2-Full", "prompt_id": "prompt-1", "history": history}):
+            with self.assertRaises(agent.ModlyCliError) as ctx:
+                agent.cmd_generate_from_workflow(args)
+        self.assertEqual(ctx.exception.code, "NO_WORKFLOW_OUTPUT")
 
     def test_batch_processes_images_sequentially(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -355,7 +436,7 @@ class ParserTests(unittest.TestCase):
             ["capability", "list"],
             ["process-run", "status", "abc"],
             ["experimental", "comfy-image"],
-            ["experimental", "generate-from-workflow", "--prompt", "asset", "--output", "asset.glb"],
+            ["experimental", "generate-from-workflow", "--workflow", "Trellis2-Full", "--prompt", "asset", "--output", "asset.glb"],
             ["export", "--path", "Agent/foo.glb", "--output", "foo.glb"],
             ["batch", "--input-dir", "imgs", "--output-dir", "meshes"],
             ["dev", "serve-api", "--print-command"],
@@ -374,6 +455,9 @@ class ParserTests(unittest.TestCase):
         self.assertNotIn("comfy-image", help_text)
         self.assertNotIn("ensure-server", help_text)
         self.assertNotIn("job", help_text)
+        self.assertNotIn("\n    status", help_text)
+        self.assertNotIn("\n    export", help_text)
+        self.assertNotIn("\n    batch", help_text)
 
 
 if __name__ == "__main__":
