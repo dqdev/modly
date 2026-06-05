@@ -2,6 +2,7 @@ import { Component, Suspense, useEffect, useMemo, useRef, useState } from 'react
 import type { ReactNode, ErrorInfo } from 'react'
 import { Canvas, useLoader, useThree } from '@react-three/fiber'
 import { Environment, GizmoHelper, Lightformer, OrbitControls, useGizmoContext, useGLTF } from '@react-three/drei'
+import { EffectComposer, Outline, Select, Selection } from '@react-three/postprocessing'
 import * as THREE from 'three'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh'
@@ -15,6 +16,13 @@ import { useAppStore } from '@shared/stores/appStore'
 import { ViewerToolbar, type ViewMode } from './ViewerToolbar'
 import type { LightSettings } from '../GeneratePage'
 import { DEFAULT_LIGHT_SETTINGS } from '../GeneratePage'
+
+const SELECTION_OUTLINE_VISIBLE_COLOR = 0x8b5cf6
+const SELECTION_OUTLINE_HIDDEN_COLOR = 0x5b21b6
+const SELECTION_OUTLINE_EDGE_STRENGTH = 2.5
+const SELECTION_OUTLINE_BLUR = false
+const SELECTION_OUTLINE_MULTISAMPLING = 0
+const SELECTION_OUTLINE_RESOLUTION_SCALE = 0.5
 
 // ---------------------------------------------------------------------------
 // Procedural textures
@@ -125,13 +133,14 @@ interface MeshModelProps {
   url: string
   jobId: string
   viewMode: ViewMode
+  selected: boolean
   onStats: (stats: { vertices: number; triangles: number }) => void
   onSelect: () => void
 }
 
-function MeshModel({ url, jobId, viewMode, onStats, onSelect }: MeshModelProps): JSX.Element {
+function MeshModel({ url, jobId, viewMode, selected, onStats, onSelect }: MeshModelProps): JSX.Element {
   const extension = url.split('?')[0]?.split('.').pop()?.toLowerCase()
-  const common = { url, jobId, viewMode, onStats, onSelect }
+  const common = { url, jobId, viewMode, selected, onStats, onSelect }
   return extension === 'obj' ? <ObjMeshModel {...common} /> : <GltfMeshModel {...common} />
 }
 
@@ -148,6 +157,7 @@ function ObjMeshModel(props: MeshModelProps): JSX.Element {
 function SceneMeshModel({
   url,
   viewMode,
+  selected,
   onStats,
   onSelect,
   scene,
@@ -267,10 +277,12 @@ function SceneMeshModel({
   }, [scene, viewMode])
 
   return (
-    <primitive
-      object={scene}
-      onClick={(e: { stopPropagation: () => void }) => { e.stopPropagation(); onSelect() }}
-    />
+    <Select enabled={selected}>
+      <primitive
+        object={scene}
+        onClick={(e: { stopPropagation: () => void }) => { e.stopPropagation(); onSelect() }}
+      />
+    </Select>
   )
 
 }
@@ -444,17 +456,33 @@ export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS }: { l
           <gridHelper args={[10, 20, '#3f3f46', '#27272a']} />
 
           {modelUrl && currentJob ? (
-            <Suspense fallback={null}>
-<directionalLight position={[5, 8, 5]} color={lightSettings.mainColor} intensity={lightSettings.mainIntensity} castShadow />
-              <directionalLight position={[-4, 2, -4]} color={lightSettings.fillColor} intensity={lightSettings.fillIntensity} />
-              <MeshModel
-                url={modelUrl}
-                jobId={currentJob.id}
-                viewMode={viewMode}
-                onStats={setStoreMeshStats}
-                onSelect={() => setSelected(true)}
-              />
-            </Suspense>
+            <Selection enabled={selected}>
+              <EffectComposer
+                autoClear={false}
+                multisampling={SELECTION_OUTLINE_MULTISAMPLING}
+                resolutionScale={SELECTION_OUTLINE_RESOLUTION_SCALE}
+              >
+                <Outline
+                  blur={SELECTION_OUTLINE_BLUR}
+                  edgeStrength={SELECTION_OUTLINE_EDGE_STRENGTH}
+                  visibleEdgeColor={SELECTION_OUTLINE_VISIBLE_COLOR}
+                  hiddenEdgeColor={SELECTION_OUTLINE_HIDDEN_COLOR}
+                  xRay={false}
+                />
+              </EffectComposer>
+              <Suspense fallback={null}>
+                <directionalLight position={[5, 8, 5]} color={lightSettings.mainColor} intensity={lightSettings.mainIntensity} castShadow />
+                <directionalLight position={[-4, 2, -4]} color={lightSettings.fillColor} intensity={lightSettings.fillIntensity} />
+                <MeshModel
+                  url={modelUrl}
+                  jobId={currentJob.id}
+                  viewMode={viewMode}
+                  selected={selected}
+                  onStats={setStoreMeshStats}
+                  onSelect={() => setSelected(true)}
+                />
+              </Suspense>
+            </Selection>
           ) : null}
 
           <OrbitControls
@@ -470,7 +498,7 @@ export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS }: { l
             dampingFactor={0.05}
           />
 
-          <GizmoHelper alignment="top-right" margin={[72, 72]}>
+          <GizmoHelper alignment="top-right" margin={[72, 72]} renderPriority={2}>
             <GizmoBubbles />
           </GizmoHelper>
         </Canvas>
