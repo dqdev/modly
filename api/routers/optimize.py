@@ -39,17 +39,28 @@ def _require_pymeshlab():
         raise HTTPException(503, "pymeshlab is unavailable on this system (DLL blocked by Windows Application Control policy)")
 
 
+def _resolve_input_path(raw_path: str) -> Path:
+    candidate = Path(raw_path)
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+        if not resolved.exists():
+            raise HTTPException(404, f"File not found: {raw_path}")
+        return resolved
+
+    resolved = (WORKSPACE_DIR / raw_path).resolve()
+    if not str(resolved).startswith(str(WORKSPACE_DIR.resolve())):
+        raise HTTPException(400, "Invalid path")
+    if not resolved.exists():
+        raise HTTPException(404, f"File not found: {raw_path}")
+    return resolved
+
+
 @router.post("/mesh")
 def optimize_mesh(body: OptimizeRequest):
     _require_pymeshlab()
     target_faces = max(100, min(500_000, body.target_faces))
 
-    # Security: prevent path traversal
-    input_path = (WORKSPACE_DIR / body.path).resolve()
-    if not str(input_path).startswith(str(WORKSPACE_DIR.resolve())):
-        raise HTTPException(400, "Invalid path")
-    if not input_path.exists():
-        raise HTTPException(404, f"File not found: {body.path}")
+    input_path = _resolve_input_path(body.path)
 
     tmp_dir = tempfile.mkdtemp()
     try:
@@ -59,21 +70,38 @@ def optimize_mesh(body: OptimizeRequest):
 
     stem = input_path.stem
     output_name = f"{stem}_opt{target_faces}.glb"
-    output_path = input_path.parent / output_name
+    output_dir = input_path.parent if str(input_path).startswith(str(WORKSPACE_DIR.resolve())) else WORKSPACE_DIR / "Workflows"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / output_name
     result.export(str(output_path))
 
-    # Reconstruct the collection name from the path
-    collection_name = body.path.split("/")[0]
     face_count = len(result.faces)
-    return {"url": f"/workspace/{collection_name}/{output_name}", "face_count": face_count}
+    rel = output_path.relative_to(WORKSPACE_DIR).as_posix()
+    return {"url": f"/workspace/{rel}", "face_count": face_count}
 
 
 def _has_texture(geom: trimesh.Trimesh) -> bool:
-    return (
-        isinstance(geom.visual, trimesh.visual.TextureVisuals)
-        and geom.visual.material is not None
-        and getattr(geom.visual.material, "image", None) is not None
-    )
+    if not isinstance(geom.visual, trimesh.visual.TextureVisuals):
+        return False
+    mat = geom.visual.material
+    if mat is None:
+        return False
+    # Simple material (SimpleMaterial / Material)
+    if getattr(mat, "image", None) is not None:
+        return True
+    # PBR material (from Trellis2 SLaT texturing and GLB imports)
+    if getattr(mat, "baseColorTexture", None) is not None:
+        return True
+    return False
+
+
+def _get_texture_image(geom: trimesh.Trimesh):
+    """Return the base color texture image regardless of material type."""
+    mat = geom.visual.material
+    img = getattr(mat, "image", None)
+    if img is not None:
+        return img
+    return getattr(mat, "baseColorTexture", None)
 
 
 def _decimate(input_path: str, target_faces: int, tmp_dir: str) -> trimesh.Trimesh:
@@ -93,8 +121,8 @@ def _decimate(input_path: str, target_faces: int, tmp_dir: str) -> trimesh.Trime
         tex_in  = os.path.join(tmp_dir, "texture.png")
         obj_out = os.path.join(tmp_dir, "output.obj")
 
-        # Save texture image under a known filename
-        geom.visual.material.image.save(tex_in)
+        # Save texture image under a known filename (handles PBR and simple materials)
+        _get_texture_image(geom).save(tex_in)
 
         # Export OBJ (trimesh writes UV coords + MTL)
         geom.export(obj_in)
@@ -146,11 +174,7 @@ def smooth_mesh(body: SmoothRequest):
     _require_pymeshlab()
     iterations = max(1, min(20, body.iterations))
 
-    input_path = (WORKSPACE_DIR / body.path).resolve()
-    if not str(input_path).startswith(str(WORKSPACE_DIR.resolve())):
-        raise HTTPException(400, "Invalid path")
-    if not input_path.exists():
-        raise HTTPException(404, f"File not found: {body.path}")
+    input_path = _resolve_input_path(body.path)
 
     tmp_dir = tempfile.mkdtemp()
     try:
@@ -160,11 +184,13 @@ def smooth_mesh(body: SmoothRequest):
 
     stem = input_path.stem
     output_name = f"{stem}_smooth{iterations}.glb"
-    output_path = input_path.parent / output_name
+    output_dir = input_path.parent if str(input_path).startswith(str(WORKSPACE_DIR.resolve())) else WORKSPACE_DIR / "Workflows"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / output_name
     result.export(str(output_path))
 
-    collection_name = body.path.split("/")[0]
-    return {"url": f"/workspace/{collection_name}/{output_name}"}
+    rel = output_path.relative_to(WORKSPACE_DIR).as_posix()
+    return {"url": f"/workspace/{rel}"}
 
 
 def _smooth(input_path: str, iterations: int, tmp_dir: str) -> trimesh.Trimesh:
@@ -183,7 +209,7 @@ def _smooth(input_path: str, iterations: int, tmp_dir: str) -> trimesh.Trimesh:
         tex_in  = os.path.join(tmp_dir, "texture.png")
         obj_out = os.path.join(tmp_dir, "output.obj")
 
-        geom.visual.material.image.save(tex_in)
+        _get_texture_image(geom).save(tex_in)
         geom.export(obj_in)
 
         if os.path.exists(mtl_in):

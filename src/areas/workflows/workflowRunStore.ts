@@ -80,7 +80,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set) => ({
   activeWorkflowId: null,
   nodeImageOutputs: {},
 
-  async run(workflow, allExtensions) {
+  async run(workflow, allExtensions, overrideImageData?) {
     _cancel.current = false
 
     const appState     = useAppStore.getState()
@@ -91,7 +91,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set) => ({
     )
 
     const selectedImagePath = appState.selectedImagePath ?? ''
-    const selectedImageData = appState.selectedImageData ?? undefined
+    const selectedImageData = overrideImageData ?? appState.selectedImageData ?? undefined
     const currentMeshUrl    = appState.currentJob?.outputUrl
 
     set({
@@ -125,7 +125,10 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set) => ({
       for (const node of ordered) {
         if (node.type === 'imageNode') {
           const fp = node.data.params?.filePath as string | undefined
-          nodeOutputs.set(node.id, { filePath: fp ?? selectedImagePath, outputType: 'image' })
+          // When the agent provides an override image, ignore any hardcoded filePath so the
+          // model node falls through to selectedImageData (= overrideImageData).
+          const resolvedPath = overrideImageData ? undefined : (fp ?? selectedImagePath ?? undefined)
+          nodeOutputs.set(node.id, { filePath: resolvedPath, outputType: 'image' })
         }
         if (node.type === 'textNode') {
           nodeOutputs.set(node.id, { text: node.data.params?.text as string | undefined })
@@ -181,12 +184,6 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set) => ({
             if (src?.filePath !== undefined) nodeInputPath = src.filePath
             if (src?.text     !== undefined) nodeInputText = src.text
           }
-          // Fallback to previous node's output
-          if (nodeInputPath === undefined && nodeInputText === undefined && i > 0) {
-            const prev = nodeOutputs.get(execNodes[i - 1].id)
-            if (prev?.filePath !== undefined) nodeInputPath = prev.filePath
-            if (prev?.text     !== undefined) nodeInputText = prev.text
-          }
         }
 
         set((s) => ({
@@ -231,6 +228,14 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set) => ({
               : norm
           }
 
+          // Merge schema defaults (with per-variant paramDefaults already applied)
+          // under user overrides so Python receives the effective values, not an
+          // empty dict that falls back to hardcoded defaults in the generator.
+          const schemaDefaults = Object.fromEntries(
+            (ext.params ?? []).map((p) => [p.id, p.default]),
+          )
+          const effectiveParams = { ...schemaDefaults, ...(node.data.params ?? {}) }
+
           const fd = new FormData()
           fd.append('image', blob, fname)
           fd.append('model_id', node.data.extensionId ?? '')
@@ -238,7 +243,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set) => ({
           fd.append('remesh', 'none')
           fd.append('enable_texture', 'false')
           fd.append('texture_resolution', '1024')
-          fd.append('params', JSON.stringify({ ...node.data.params, ...extraParams }))
+          fd.append('params', JSON.stringify({ ...effectiveParams, ...extraParams }))
 
           set((s) => ({ runState: { ...s.runState, blockProgress: 5, blockStep: 'Submitting to model…' } }))
 
@@ -282,6 +287,15 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set) => ({
 
         } else {
           // ── Process extension → IPC ─────────────────────────────────────
+          if (ext?.input === 'mesh' && !nodeInputPath) {
+            throw new Error(`${ext.name} needs an incoming mesh connection`)
+          }
+          if (ext?.input === 'image' && !nodeInputPath) {
+            throw new Error(`${ext.name} needs an incoming image connection`)
+          }
+          if (ext?.input === 'text' && !nodeInputText) {
+            throw new Error(`${ext.name} needs an incoming text connection`)
+          }
           const parts  = (node.data.extensionId ?? '').split('/')
           const extId  = parts[0]
           const nodeId = parts[1] ?? ''
@@ -389,6 +403,9 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set) => ({
       _activeJobId.current = null
     }
     set({ runState: IDLE, activeNodeId: null, activeWorkflowId: null, nodeImageOutputs: {} })
+    // Clear the generation HUD so it doesn't show stale progress after cancel.
+    // The backend's subprocess hard-kill is asynchronous; the UI shouldn't wait.
+    useAppStore.getState().setCurrentJob(null)
   },
 
   reset() {
