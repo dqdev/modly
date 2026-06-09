@@ -1,12 +1,13 @@
 import { useState } from 'react'
-import { StorageSection }      from './components/StorageSection'
-import { AboutSection }        from './components/AboutSection'
-import { LogsSection }         from './components/LogsSection'
+import { StorageSection } from './components/StorageSection'
+import { AboutSection } from './components/AboutSection'
+import { LogsSection } from './components/LogsSection'
 import { IntegrationsSection } from './components/IntegrationsSection'
-import { AgentSection }        from './components/AgentSection'
-import { ApplicationSection }  from './components/ApplicationSection'
+import { AgentSection } from './components/AgentSection'
+import { ApplicationSection } from './components/ApplicationSection'
+import { AccessibilitySection } from './components/AccessibilitySection'
 
-type Section = 'application' | 'storage' | 'integrations' | 'agent' | 'logs' | 'about'
+type Section = 'application' | 'storage' | 'integrations' | 'accessibility' | 'agent' | 'logs' | 'about'
 
 const SECTIONS: { id: Section; label: string; icon: JSX.Element }[] = [
   {
@@ -38,6 +39,18 @@ const SECTIONS: { id: Section; label: string; icon: JSX.Element }[] = [
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
         <rect x="2" y="7" width="20" height="14" rx="2" ry="2"/>
         <path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/>
+      </svg>
+    )
+  },
+  {
+    id: 'accessibility',
+    label: 'Accessibility',
+    icon: (
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+        <circle cx="12" cy="4" r="2" />
+        <path d="M19 9l-7 1-7-1" />
+        <path d="M12 10v6" />
+        <path d="M9 22l3-6 3 6" />
       </svg>
     )
   },
@@ -109,11 +122,12 @@ export default function SettingsPage(): JSX.Element {
       <div className="flex-1 overflow-y-auto bg-surface-400">
         <div className="p-8">
           {section === 'application'   && <ApplicationSection />}
-          {section === 'storage'      && <StorageSection />}
-          {section === 'integrations' && <IntegrationsSection />}
-          {section === 'agent'        && <AgentSection />}
-          {section === 'logs'         && <LogsSection />}
-          {section === 'about'        && <AboutSection />}
+          {section === 'storage'       && <StorageSection />}
+          {section === 'integrations'  && <IntegrationsSection />}
+          {section === 'accessibility' && <AccessibilitySection />}
+          {section === 'agent'         && <AgentSection />}
+          {section === 'logs'          && <LogsSection />}
+          {section === 'about'         && <AboutSection />}
         </div>
       </div>
 

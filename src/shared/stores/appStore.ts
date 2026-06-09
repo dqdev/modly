@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
+export type UiScale = 'small' | 'medium' | 'large'
 export type BackendStatus = 'not_started' | 'starting' | 'ready' | 'error'
 export type SetupStatus = 'idle' | 'checking' | 'needed' | 'installing' | 'done' | 'error'
 export interface SetupProgress { step: string; percent: number; currentPackage?: string }
@@ -111,6 +112,12 @@ interface AppState {
   showRamIndicator: boolean
   setShowRamIndicator: (v: boolean) => void
 
+  // Accessibility
+  useAtkinsonFont: boolean
+  setUseAtkinsonFont: (v: boolean) => void
+  uiScale: UiScale
+  setUiScale: (v: UiScale) => void
+
   // Actions
   initApp: () => Promise<void>
   setCurrentJob: (job: GenerationJob | null) => void
@@ -205,6 +212,11 @@ export const useAppStore = create<AppState>()(
       showRamIndicator: true,
       setShowRamIndicator: (v) => set({ showRamIndicator: v }),
 
+      useAtkinsonFont: false,
+      setUseAtkinsonFont: (v) => set({ useAtkinsonFont: v }),
+      uiScale: 'medium',
+      setUiScale: (v) => set({ uiScale: v }),
+
       currentJob: null,
       selectedImagePath: null,
       setSelectedImagePath: (path) => set({ selectedImagePath: path }),
@@ -254,6 +266,8 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         generationOptions: state.generationOptions,
         showRamIndicator: state.showRamIndicator,
+        useAtkinsonFont: state.useAtkinsonFont,
+        uiScale: state.uiScale,
       }),
     }
   )

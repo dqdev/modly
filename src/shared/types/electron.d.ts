@@ -121,6 +121,9 @@ declare global {
         maximize: () => void
         close:    () => void
       }
+      ui: {
+        setZoomFactor: (factor: number) => void
+      }
       python: {
         start:     () => Promise<{ success: boolean; port?: number; error?: string }>
         status:    () => Promise<{ ready: boolean; apiUrl: string }>
