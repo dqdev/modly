@@ -25,7 +25,7 @@ Alternatively, you can clone the repository and run the app directly without ins
 
 ```bash
 # Windows
-launcher.bat
+launch.bat
 
 # Linux / macOS
 ./launcher.sh
@@ -108,7 +108,28 @@ Modly supports external model and process extensions. Each extension is a GitHub
 
 ---
 
-### Community 
+## Modly CLI
+
+Agents and scripts can call a running Modly desktop app without using the UI via the stdlib-only CLI. The CLI is a thin helper over Modly's canonical automation concepts and keeps final machine-readable JSON on stdout:
+
+```bash
+python tools/modly-cli/agent.py health
+python tools/modly-cli/agent.py model list
+python tools/modly-cli/agent.py workflow-run status <run_id>
+python tools/modly-cli/agent.py generate --image ./input.png --output ./export.glb
+```
+
+Canonical commands are `health`, `model`, `workflow-run`, `capability`, and `process-run`. The friendly `generate` command starts `POST /workflow-runs/from-image`, polls the returned run, exports the final mesh when requested, and includes recovery metadata such as `workflow-run status ...` and `workflow-run cancel ...` in the JSON response.
+
+Compatibility and helper surfaces are intentionally separated: `legacy` wraps old `/generate/*` job endpoints, `dev serve-api` / `dev ensure-server` start only the FastAPI backend and do not prove Electron/Desktop bridge readiness, and `experimental comfy-image` / `experimental generate-from-workflow` are external ComfyUI orchestration helpers rather than the canonical Modly agent contract. Hidden helper aliases such as `status`, `export`, and `batch` remain parseable for scripts, but they are not presented as canonical root commands.
+
+`experimental generate-from-workflow --workflow <name> --output <path>` treats `--output` as the final artifact location. When the ComfyUI workflow produces a downloadable 3D asset, the CLI downloads it directly; image-only workflows remain a compatibility path through Modly image-to-3D generation.
+
+See `tools/modly-cli/SKILL.md` for the agent workflow and output contract.
+
+---
+
+### Community
 
 Join the [Discord server](https://discord.gg/BvjDCvS3yr) to stay up to date with the latest news, report bugs, and share feedback.
 
