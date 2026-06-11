@@ -37,6 +37,29 @@ const GIZMO_AXES: { letter: string; color: string; pos: [number, number, number]
 
 type Axis = 'x' | 'y' | 'z'
 
+function AxisBubble({
+  axis,
+  texture,
+  onAxisClick,
+}: {
+  axis: (typeof GIZMO_AXES)[number]
+  texture: THREE.CanvasTexture
+  onAxisClick: (axis: Axis) => void
+}): JSX.Element {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <sprite
+      position={axis.pos}
+      scale={hovered ? 1.2 : 1}
+      onPointerDown={(e) => { e.stopPropagation(); onAxisClick(axis.letter.toLowerCase() as Axis) }}
+      onPointerOver={(e) => { e.stopPropagation(); setHovered(true); document.body.style.cursor = 'pointer' }}
+      onPointerOut={() => { setHovered(false); document.body.style.cursor = 'default' }}
+    >
+      <spriteMaterial map={texture} alphaTest={0.3} toneMapped={false} />
+    </sprite>
+  )
+}
+
 function GizmoContent({
   getQuaternion,
   onAxisClick,
@@ -53,8 +76,10 @@ function GizmoContent({
     if (q && groupRef.current) groupRef.current.quaternion.copy(q).invert()
   })
 
+  // Same proportions as the mesh viewer's drei GizmoHelper: bubbles group at
+  // scale 40 under an orthographic camera (1 world unit ≈ 1 px).
   return (
-    <group ref={groupRef}>
+    <group ref={groupRef} scale={40}>
       {GIZMO_AXES.map((axis) => (
         <group key={`line-${axis.letter}`} rotation={axis.rot}>
           <mesh position={[0.4, 0, 0]}>
@@ -64,16 +89,7 @@ function GizmoContent({
         </group>
       ))}
       {GIZMO_AXES.map((axis, i) => (
-        <sprite
-          key={axis.letter}
-          position={axis.pos}
-          scale={0.9}
-          onClick={(e) => { e.stopPropagation(); onAxisClick(axis.letter.toLowerCase() as Axis) }}
-          onPointerOver={() => { document.body.style.cursor = 'pointer' }}
-          onPointerOut={() => { document.body.style.cursor = 'default' }}
-        >
-          <spriteMaterial map={textures[i]} alphaTest={0.3} toneMapped={false} />
-        </sprite>
+        <AxisBubble key={axis.letter} axis={axis} texture={textures[i]} onAxisClick={onAxisClick} />
       ))}
     </group>
   )
@@ -86,13 +102,63 @@ function SplatGizmo({
   getQuaternion: () => THREE.Quaternion | undefined
   onAxisClick: (axis: Axis) => void
 }): JSX.Element {
+  // Orthographic camera mirrors drei's GizmoHelper so the splat gizmo matches
+  // the mesh (GLB) gizmo's size and look exactly.
   return (
-    <div className="absolute top-3 right-3 w-24 h-24">
-      <Canvas camera={{ position: [0, 0, 4.3], fov: 40 }} gl={{ alpha: true }}>
+    <div className="absolute top-3 right-3 w-32 h-32">
+      <Canvas orthographic camera={{ position: [0, 0, 200], zoom: 1 }} gl={{ alpha: true }}>
         <GizmoContent getQuaternion={getQuaternion} onAxisClick={onAxisClick} />
       </Canvas>
     </div>
   )
+}
+
+// ---------------------------------------------------------------------------
+// Frame the loaded splat like the mesh viewer: the mesh viewer recenters the
+// model and uses a fixed camera, but mkkellogg sorts splats by their built
+// positions, so translating the splatMesh would corrupt depth sorting. Instead
+// we measure the splat's bounds (sampled splat centres) and fit the *camera*
+// to them, then drop the grid under the model's feet.
+// ---------------------------------------------------------------------------
+
+function frameSplatToView(viewer: any, grid: THREE.GridHelper): void {
+  const splatMesh = viewer?.splatMesh
+  const camera = viewer?.camera
+  if (!splatMesh || !camera) return
+
+  const count: number = splatMesh.getSplatCount?.() ?? 0
+  if (count === 0) return
+
+  const box = new THREE.Box3()
+  const c = new THREE.Vector3()
+  const step = Math.max(1, Math.floor(count / 20000)) // sample for large clouds
+  for (let i = 0; i < count; i += step) {
+    splatMesh.getSplatCenter(i, c, true) // true → built (rendered) coordinates
+    box.expandByPoint(c)
+  }
+  if (box.isEmpty()) return
+
+  const center = box.getCenter(new THREE.Vector3())
+  const size = box.getSize(new THREE.Vector3())
+  const maxDim = Math.max(size.x, size.y, size.z)
+
+  // Pull back enough to fit the largest dimension at fov 45, with margin.
+  const fov = (camera.fov ?? 45) * (Math.PI / 180)
+  const dist = (maxDim / 2 / Math.tan(fov / 2)) * 1.6
+
+  // Same 3/4 front view as the mesh viewer; −Z side shows the face after the
+  // 180° Z flip applied in addSplatScene.
+  const dir = new THREE.Vector3(0, 0.35, -1).normalize()
+  camera.position.copy(center).add(dir.multiplyScalar(dist))
+  camera.lookAt(center)
+
+  const controls = viewer.controls
+  if (controls?.target) {
+    controls.target.copy(center)
+    controls.update?.()
+  }
+
+  grid.position.y = box.min.y // feet on the grid, like the mesh viewer
 }
 
 // ---------------------------------------------------------------------------
@@ -154,6 +220,13 @@ const SplatViewer = forwardRef<SplatViewerHandle, { url: string; autoRotate: boo
       })
       viewerRef.current = viewer
 
+      // Match the mesh viewer's framing: mkkellogg defaults to fov 65, the mesh
+      // Canvas uses 45 — the wider fov made the splat look smaller / distorted.
+      if (viewer.camera) {
+        viewer.camera.fov = 45
+        viewer.camera.updateProjectionMatrix()
+      }
+
       // Floor grid, matching the mesh viewer.
       const grid = new THREE.GridHelper(10, 20, 0x3f3f46, 0x27272a)
       viewer.threeScene.add(grid)
@@ -168,6 +241,7 @@ const SplatViewer = forwardRef<SplatViewerHandle, { url: string; autoRotate: boo
         .then(() => {
           if (disposed) return
           viewer.start()
+          frameSplatToView(viewer, grid)
           setStatus('ready')
         })
         .catch((err: unknown) => {

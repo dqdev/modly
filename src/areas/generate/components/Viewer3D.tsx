@@ -485,7 +485,6 @@ export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS }: { l
           {modelUrl && currentJob ? (
             <Selection enabled={selected}>
               <EffectComposer
-                autoClear={false}
                 multisampling={SELECTION_OUTLINE_MULTISAMPLING}
                 resolutionScale={SELECTION_OUTLINE_RESOLUTION_SCALE}
               >
@@ -525,7 +524,7 @@ export default function Viewer3D({ lightSettings = DEFAULT_LIGHT_SETTINGS }: { l
             dampingFactor={0.05}
           />
 
-          <GizmoHelper alignment="top-right" margin={[72, 72]} renderPriority={2}>
+          <GizmoHelper alignment="top-right" margin={[72, 72]} renderPriority={modelUrl && currentJob ? 2 : 0}>
             <GizmoBubbles />
           </GizmoHelper>
         </Canvas>
