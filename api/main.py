@@ -40,6 +40,9 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
+    # drei's SplatLoader reads Content-Length to size its buffers; cross-origin
+    # JS can only see it when the server explicitly exposes the header.
+    expose_headers=["Content-Length"],
 )
 
 app.include_router(status.router)

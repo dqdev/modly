@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",
+    "@mkkellogg/gaussian-splats-3d": "^0.4.7",
     "@react-three/drei": "^9.120.0",
     "@react-three/fiber": "^8.17.10",
     "@react-three/postprocessing": "^2.19.1",

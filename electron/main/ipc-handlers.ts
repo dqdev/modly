@@ -308,7 +308,7 @@ export function setupIpcHandlers(pythonBridge: PythonBridge, getWindow: WindowGe
 
     const result = await dialog.showOpenDialog(win, {
       title: 'Select a 3D mesh file',
-      filters: [{ name: '3D Mesh', extensions: ['glb', 'obj', 'stl', 'ply'] }],
+      filters: [{ name: '3D Mesh', extensions: ['glb', 'obj', 'stl', 'ply', 'splat'] }],
       properties: ['openFile']
     })
 

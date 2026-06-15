@@ -548,7 +548,7 @@ export default function GeneratePage(): JSX.Element {
                   </svg>
                   <div>
                     <p className="text-xs text-zinc-200">Mesh</p>
-                    <p className="text-[10px] text-zinc-500">.glb .obj .stl .ply</p>
+                    <p className="text-[10px] text-zinc-500">.glb .obj .stl .ply .splat</p>
                   </div>
                 </button>
               </div>
