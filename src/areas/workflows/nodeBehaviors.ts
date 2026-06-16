@@ -12,21 +12,26 @@ import type { WFNode, WFEdge } from '@shared/types/electron.d'
 //                   pauses on these nodes and exposes a Continue/Retry button.
 // • sceneOutput   — terminal sink that gets pushed to the 3D viewer. Used by
 //                   the immediate mesh-push logic during execution.
+// • branchConsumer — executes inside a Wait branch and consumes its single mesh
+//                   output, so it can't be fed by more than one Wait branch.
 
 export interface NodeBehavior {
-  passthrough?:   boolean
-  branchStarter?: boolean
-  sceneOutput?:   boolean
+  passthrough?:    boolean
+  branchStarter?:  boolean
+  sceneOutput?:    boolean
+  branchConsumer?: boolean
 }
 
 const BEHAVIORS: Record<string, NodeBehavior> = {
-  waitNode:   { passthrough: true, branchStarter: true },
-  outputNode: { sceneOutput: true },
+  waitNode:      { passthrough: true, branchStarter: true },
+  outputNode:    { sceneOutput: true, branchConsumer: true },
+  extensionNode: { branchConsumer: true },
 }
 
-export const isPassthrough   = (type: string | undefined): boolean => !!type && !!BEHAVIORS[type]?.passthrough
-export const isBranchStarter = (type: string | undefined): boolean => !!type && !!BEHAVIORS[type]?.branchStarter
-export const isSceneOutput   = (type: string | undefined): boolean => !!type && !!BEHAVIORS[type]?.sceneOutput
+export const isPassthrough    = (type: string | undefined): boolean => !!type && !!BEHAVIORS[type]?.passthrough
+export const isBranchStarter  = (type: string | undefined): boolean => !!type && !!BEHAVIORS[type]?.branchStarter
+export const isSceneOutput    = (type: string | undefined): boolean => !!type && !!BEHAVIORS[type]?.sceneOutput
+export const isBranchConsumer = (type: string | undefined): boolean => !!type && !!BEHAVIORS[type]?.branchConsumer
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -77,7 +82,10 @@ export function nearestUpstreamWaits(
 
 /**
  * True if any forward path from `sourceId` reaches a sceneOutput node, walking
- * through passthrough nodes along the way.
+ * through passthrough nodes — but stopping at branch-starter (Wait) boundaries.
+ * A scene output gated behind a Wait belongs to a branch that runs later, so it
+ * must not be treated as immediately reachable (otherwise pre-phase nodes would
+ * push their mesh to the viewer before the user clicks Continue).
  */
 export function reachesSceneOutput(
   sourceId: string,
@@ -93,8 +101,8 @@ export function reachesSceneOutput(
     for (const e of edges) {
       if (e.source !== id) continue
       const tType = nodeMap.get(e.target)?.type
-      if (isSceneOutput(tType))  return true
-      if (isPassthrough(tType))  stack.push(e.target)
+      if (isSceneOutput(tType))                          return true
+      if (isPassthrough(tType) && !isBranchStarter(tType)) stack.push(e.target)
     }
   }
   return false

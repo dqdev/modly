@@ -288,6 +288,29 @@ function descendantWaits(rootId: string, ctx: RunContext): Set<string> {
   return out
 }
 
+/**
+ * Push the mesh of every scene output owned by `waitId`'s branch to the viewer.
+ * A branch whose only scene output has no in-branch processing (e.g. Wait → Add
+ * to Scene) gets no immediate push during execution, so the display has to be
+ * driven here, when the user continues that branch.
+ */
+function pushBranchSceneMesh(ctx: RunContext, waitId: string): void {
+  for (const node of ctx.ordered) {
+    if (!isSceneOutput(node.type)) continue
+    const owners = nearestUpstreamWaits(node.id, ctx.workflow.edges, ctx.nodeMap)
+    if (owners.size !== 1 || [...owners][0] !== waitId) continue
+    const inEdge = ctx.workflow.edges.find((e) => e.target === node.id)
+    if (!inEdge) continue
+    const srcId = resolveDataSource(inEdge.source, ctx.workflow.edges, ctx.nodeMap)
+    const fp = srcId ? ctx.nodeOutputs.get(srcId)?.filePath?.replace(/\\/g, '/') : undefined
+    if (fp && fp.startsWith(ctx.workspaceDir)) {
+      const url = `/workspace/${fp.slice(ctx.workspaceDir.length).replace(/^\//, '')}`
+      ctx.lastSceneMesh = url
+      useAppStore.getState().updateCurrentJob({ status: 'done', progress: 100, outputUrl: url })
+    }
+  }
+}
+
 // ─── Store ────────────────────────────────────────────────────────────────────
 
 interface WorkflowRunStore {
@@ -494,8 +517,14 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => {
       // Only runnable Waits: blocked (parent not done) and running are not.
       const ws = state.waitStates[waitId]
       if (ws !== 'pending' && ws !== 'done' && ws !== 'error') return
+      // A pending Wait only runs after a clean handoff. If the run errored in the
+      // pre-phase, it never handed off — don't start a branch with missing inputs.
+      if (ws === 'pending' && state.runState.status === 'error') return
       const ctx = _ctx.current
-      if (!ctx) return
+      if (!ctx) {
+        console.warn('continueRun: no active run context — was the module hot-reloaded mid-run?')
+        return
+      }
 
       const branch = ctx.branches.get(waitId) ?? []
       // Re-running a Wait invalidates everything downstream: descendant branches
@@ -522,11 +551,13 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => {
       const finishBranch = (next: WaitState, err?: string): void => {
         if (_cancel.current) return
         const newWaitStates = { ...get().waitStates, [waitId]: next }
-        // Unblock nested Waits whose parent branch just finished.
+        // Unblock nested Waits whose parent branch just finished, and push this
+        // branch's scene output to the viewer.
         if (next === 'done') {
           for (const w of ctx.waitIds) {
             if (ctx.parentWait.get(w) === waitId && newWaitStates[w] === 'blocked') newWaitStates[w] = 'pending'
           }
+          pushBranchSceneMesh(ctx, waitId)
         }
         // A failed branch can never feed its descendants — surface them as error
         // too, otherwise they stay 'blocked' and the run hangs on 'paused' forever.
@@ -548,7 +579,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => {
             runState: {
               ...s.runState,
               status:    allFinished ? 'error' : 'paused',
-              error:     err ?? s.runState.error,
+              error:     anyError ? (err ?? s.runState.error) : undefined,
               blockStep: err ? `Branch failed: ${err}` : 'Pick a branch and click Continue',
             },
           }))

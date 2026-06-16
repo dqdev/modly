@@ -1,6 +1,6 @@
 import type { Workflow, WFNode } from '@shared/types/electron.d'
 import { getWorkflowExtension, type WorkflowExtension } from './mockExtensions'
-import { isPassthrough, resolveDataSource, nearestUpstreamWaits } from './nodeBehaviors'
+import { isPassthrough, isBranchConsumer, resolveDataSource, nearestUpstreamWaits } from './nodeBehaviors'
 
 type DataType = 'image' | 'text' | 'mesh'
 
@@ -80,7 +80,7 @@ export function validateWorkflowPreflight(
     // A node fed by two different Wait branches can't be scheduled into a single
     // branch — it would run before either branch produces its mesh.
     if (
-      (node.type === 'extensionNode' || node.type === 'outputNode') &&
+      isBranchConsumer(node.type) &&
       nearestUpstreamWaits(node.id, workflow.edges, nodeMap).size > 1
     ) {
       pushIssue(issues, {
