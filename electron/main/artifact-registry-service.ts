@@ -12,8 +12,8 @@ import type {
   AssetLibraryPreviewPayload,
   AssetLibraryReadResult,
   AssetLibrarySourceScope,
-} from '../../src/shared/types/assetLibrary.ts'
-import type { ArtifactProvenance } from '../../src/shared/types/artifacts.ts'
+} from '../../src/shared/types/assetLibrary'
+import type { ArtifactProvenance } from '../../src/shared/types/artifacts'
 
 const WINDOWS_ABSOLUTE_PATH = /^[a-zA-Z]:[\\/]/
 const ENCODED_ESCAPE_PATTERN = /%2e|%2f|%5c/i

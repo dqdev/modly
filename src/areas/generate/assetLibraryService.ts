@@ -5,8 +5,8 @@ import type {
   AssetLibraryOpenResult,
   AssetLibraryReadRequest,
   AssetLibraryReadResult,
-} from '../../shared/types/assetLibrary.ts'
-import { projectAssetLibraryEntry, type ProjectedAssetLibraryEntry } from './assetLibraryProjection.ts'
+} from '../../shared/types/assetLibrary'
+import { projectAssetLibraryEntry, type ProjectedAssetLibraryEntry } from './assetLibraryProjection'
 
 export interface AssetLibraryPreloadApi {
   list: () => Promise<AssetLibraryListResult>

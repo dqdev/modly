@@ -1,4 +1,4 @@
-import type { AssetCapability, AssetLibraryEntry, AssetLibrarySourceScope } from '../../shared/types/assetLibrary.ts'
+import type { AssetCapability, AssetLibraryEntry, AssetLibrarySourceScope } from '../../shared/types/assetLibrary'
 
 export interface ProjectedAssetLibraryEntry extends AssetLibraryEntry {
   warnings: string[]

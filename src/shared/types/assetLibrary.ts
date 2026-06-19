@@ -1,4 +1,4 @@
-import type { ArtifactProvenance } from './artifacts.ts'
+import type { ArtifactProvenance } from './artifacts'
 
 export const ASSET_CAPABILITIES = [
   'mesh',

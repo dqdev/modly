@@ -4,9 +4,3 @@ export interface ArtifactProvenance {
   source?: string
   [key: string]: unknown
 }
-
-export interface ArtifactRef {
-  artifactId?: string
-  versionId?: string
-  provenance?: ArtifactProvenance
-}

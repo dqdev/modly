@@ -7,7 +7,7 @@ import type {
   AssetLibraryOpenResult,
   AssetLibraryReadRequest,
   AssetLibraryReadResult,
-} from './assetLibrary.ts'
+} from './assetLibrary'
 
 // ─── Extension types ──────────────────────────────────────────────────────────
 
