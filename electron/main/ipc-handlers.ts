@@ -22,6 +22,7 @@ import { getBuiltinExtensionsDir } from './builtin-sync'
 import { spawn, execFile } from 'child_process'
 import { assertSafeExtensionId, buildExtensionBackupPath, resolveExtensionPathWithinRoot } from './extension-path-guard'
 import { isSetupFailureFatal, validateInstallManifest } from './extension-install-utils'
+import { registerWorkspaceAssetLibraryIpcHandlers } from './artifact-registry-service'
 
 type WindowGetter = () => BrowserWindow | null
 const pExecFile = promisify(execFile)
@@ -619,6 +620,11 @@ export function setupIpcHandlers(pythonBridge: PythonBridge, getWindow: WindowGe
   // Workspace filesystem-based persistence
   const workspacePath = (...parts: string[]) =>
     join(getSettings(app.getPath('userData')).workspaceDir, ...parts)
+
+  registerWorkspaceAssetLibraryIpcHandlers({
+    ipcMain,
+    getWorkspaceDir: () => getSettings(app.getPath('userData')).workspaceDir,
+  })
 
   ipcMain.handle('workspace:listCollections', async () => {
     const base = workspacePath()
