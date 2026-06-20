@@ -1,12 +1,27 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import type { ReactNode } from 'react'
-import { useAppStore } from '@shared/stores/appStore'
-import type { GenerationJob } from '@shared/stores/appStore'
+import { useAppStore, DEFAULT_LIGHT_SETTINGS } from '@shared/stores/appStore'
+import type { GenerationJob, LightSettings } from '@shared/stores/appStore'
 import { useApi } from '@shared/hooks/useApi'
 import { ColorPicker } from '@shared/components/ui'
 import GenerationHUD from './components/GenerationHUD'
 import Viewer3D from './components/Viewer3D'
 import WorkflowPanel from './components/WorkflowPanel'
+import { getDefaultAssetLibraryService } from './assetLibraryService'
+import { resolveAssetLibraryOpenTarget, type ProjectedAssetLibraryEntry } from './assetLibraryProjection'
+import {
+  ASSET_LIBRARY_SORT_OPTIONS,
+  buildAssetLibraryOpenRequest,
+  createAssetLibraryOpenJob,
+  describeAssetLibraryOpenability,
+  filterAssetLibraryScopeGroups,
+  getDefaultAssetLibraryCollapsedSectionKeys,
+  isAssetLibraryEntryOpenable,
+  resolveOpenPanelAfterLibrarySelection,
+  toggleAssetLibrarySectionKey,
+  type AssetLibrarySortMode,
+  type GenerateOpenPanel,
+} from './assetLibraryUi'
 
 const MIN_WIDTH = 220
 const MAX_WIDTH = 520
@@ -160,20 +175,6 @@ function DecimatePopover({
 // Light popover
 // ---------------------------------------------------------------------------
 
-export interface LightSettings {
-  mainIntensity: number
-  mainColor: string
-  fillIntensity: number
-  fillColor: string
-}
-
-export const DEFAULT_LIGHT_SETTINGS: LightSettings = {
-  mainIntensity: 1.5,
-  mainColor: '#ffffff',
-  fillIntensity: 0.6,
-  fillColor: '#ffffff',
-}
-
 function LightPopover({
   settings,
   onChange,
@@ -300,22 +301,264 @@ function SmoothPopover({
 }
 
 // ---------------------------------------------------------------------------
+// Workspace library popover
+// ---------------------------------------------------------------------------
+
+function AssetLibraryToggleButton({
+  open,
+  disabled,
+  onToggle,
+}: {
+  open: boolean
+  disabled: boolean
+  onToggle: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      disabled={disabled}
+      aria-haspopup="dialog"
+      aria-expanded={open}
+      className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-colors disabled:opacity-50 disabled:pointer-events-none
+        ${open
+          ? 'bg-zinc-700 border-zinc-600 text-zinc-200'
+          : 'bg-zinc-800 border-zinc-700/50 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600'
+        }`}
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true">
+        <path d="M4 6h16" />
+        <path d="M4 12h16" />
+        <path d="M4 18h10" />
+      </svg>
+      Library
+    </button>
+  )
+}
+
+function AssetLibraryPopover({
+  entries,
+  selectedEntryId,
+  loading,
+  opening,
+  error,
+  searchQuery,
+  sortMode,
+  collapsedSectionKeys,
+  onSelectEntry,
+  onSearchQueryChange,
+  onSortModeChange,
+  onToggleSection,
+  onOpenSelected,
+  onRefresh,
+  onClose,
+}: {
+  entries: ProjectedAssetLibraryEntry[]
+  selectedEntryId: string | null
+  loading: boolean
+  opening: boolean
+  error: string | null
+  searchQuery: string
+  sortMode: AssetLibrarySortMode
+  collapsedSectionKeys: string[]
+  onSelectEntry: (entryId: string) => void
+  onSearchQueryChange: (value: string) => void
+  onSortModeChange: (value: AssetLibrarySortMode) => void
+  onToggleSection: (sectionKey: string) => void
+  onOpenSelected: () => void
+  onRefresh: () => void
+  onClose: () => void
+}) {
+  const scopeGroups = filterAssetLibraryScopeGroups(entries, searchQuery, sortMode)
+  const visibleEntryIds = new Set(scopeGroups.flatMap((scopeGroup) => scopeGroup.entryGroups.flatMap((group) => group.entries.map((entry) => entry.id))))
+  const selectedEntry = selectedEntryId && visibleEntryIds.has(selectedEntryId)
+    ? entries.find((entry) => entry.id === selectedEntryId) ?? null
+    : null
+  const normalizedSearchQuery = searchQuery.trim()
+  const openDisabled = !selectedEntry || !isAssetLibraryEntryOpenable(selectedEntry) || loading || opening
+  const selectedMessage = selectedEntry
+    ? describeAssetLibraryOpenability(selectedEntry)
+    : scopeGroups.length === 0 && normalizedSearchQuery
+      ? `No workspace assets match “${normalizedSearchQuery}”.`
+      : 'Select an asset to open it in Generate.'
+
+  return (
+    <div
+      role="dialog"
+      aria-label="Workspace library"
+      className="absolute top-full left-0 mt-1 z-50 w-[320px] max-w-[calc(100vw-2rem)] bg-zinc-900 border border-zinc-700/60 rounded-xl p-3 flex flex-col gap-3 shadow-xl"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Workspace library</p>
+          <p className="text-xs text-zinc-300">Select a workspace asset and open the supported source in Generate.</p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-2 py-1 text-[11px] text-zinc-400 hover:text-zinc-200 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors"
+        >
+          Close library
+        </button>
+      </div>
+
+      <button
+        type="button"
+        onClick={onRefresh}
+        disabled={loading || opening}
+        className="self-start px-2.5 py-1.5 text-[11px] text-zinc-300 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 disabled:pointer-events-none rounded-lg transition-colors"
+      >
+        Refresh assets
+      </button>
+
+      <div className="flex items-end gap-2">
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <label htmlFor="asset-library-search" className="text-[11px] text-zinc-300">Search workspace assets</label>
+          <input
+            id="asset-library-search"
+            type="search"
+            value={searchQuery}
+            onChange={(event) => onSearchQueryChange(event.target.value)}
+            placeholder="Search by name, path, scope, or capability"
+            className="bg-zinc-800 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs text-zinc-200 w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          />
+        </div>
+        <div className="flex w-24 shrink-0 flex-col gap-1.5">
+          <label htmlFor="asset-library-sort" className="text-[11px] text-zinc-300">Sort</label>
+          <select
+            id="asset-library-sort"
+            value={sortMode}
+            onChange={(event) => onSortModeChange(event.target.value as AssetLibrarySortMode)}
+            className="bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          >
+            {ASSET_LIBRARY_SORT_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {loading ? (
+        <p role="status" className="text-xs text-zinc-400">Loading workspace assets…</p>
+      ) : scopeGroups.length === 0 && !normalizedSearchQuery ? (
+        <p role="status" className="text-xs text-zinc-500">No workspace assets are indexed yet.</p>
+      ) : scopeGroups.length === 0 ? (
+        <p role="status" className="text-xs text-zinc-500">{`No workspace assets match “${normalizedSearchQuery}”.`}</p>
+      ) : (
+        <div role="list" aria-label="Workspace library assets" className="max-h-64 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950/40">
+          {scopeGroups.map((scopeGroup) => {
+            const scopeExpanded = !collapsedSectionKeys.includes(scopeGroup.sectionKey)
+            const scopeRegionId = `asset-library-${scopeGroup.sectionKey.replace(/[^a-z0-9-]+/gi, '-')}`
+            return (
+              <section key={scopeGroup.sectionKey} role="group" aria-label={`Source scope ${scopeGroup.sourceScopeLabel}`} className="border-b border-zinc-800 last:border-b-0">
+                <button
+                  type="button"
+                  aria-expanded={scopeExpanded}
+                  aria-controls={scopeRegionId}
+                  onClick={() => onToggleSection(scopeGroup.sectionKey)}
+                  className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+                >
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-300">{scopeGroup.sourceScopeLabel}</span>
+                  <span className="text-[10px] text-zinc-500">{scopeExpanded ? 'Hide' : 'Show'}</span>
+                </button>
+                {scopeExpanded && (
+                  <div id={scopeRegionId}>
+                    {scopeGroup.entryGroups.map((group) => {
+                      const capabilityExpanded = !collapsedSectionKeys.includes(group.sectionKey)
+                      const capabilityRegionId = `asset-library-${group.sectionKey.replace(/[^a-z0-9-]+/gi, '-')}`
+                      return (
+                        <section key={group.sectionKey} role="group" aria-label={`Capability category ${group.capabilityLabel}`} className="border-t border-zinc-800 first:border-t-0">
+                          <button
+                            type="button"
+                            aria-expanded={capabilityExpanded}
+                            aria-controls={capabilityRegionId}
+                            onClick={() => onToggleSection(group.sectionKey)}
+                            className="flex w-full items-center justify-between gap-2 px-4 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+                          >
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-400">{group.capabilityLabel}</span>
+                            <span className="text-[10px] text-zinc-500">{capabilityExpanded ? 'Hide' : 'Show'}</span>
+                          </button>
+                          {capabilityExpanded && (
+                            <div id={capabilityRegionId}>
+                              {group.entries.map((entry) => {
+                                const selected = entry.id === selectedEntryId
+                                return (
+                                  <button
+                                    key={entry.id}
+                                    type="button"
+                                    role="listitem"
+                                    aria-pressed={selected}
+                                    aria-label={`Select library asset ${entry.displayName}`}
+                                    onClick={() => onSelectEntry(entry.id)}
+                                    className={`w-full text-left px-4 py-2 border-t border-zinc-800 first:border-t-0 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400
+                                      ${selected ? 'bg-violet-500/10 text-zinc-100' : 'text-zinc-300 hover:bg-zinc-800/80'}`}
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <span className="text-xs font-medium">{entry.displayName}</span>
+                                      <span className="text-[10px] uppercase tracking-wider text-zinc-500">{entry.capability ?? entry.state.replace(/-/g, ' ')}</span>
+                                    </div>
+                                    <p className="mt-1 truncate text-[10px] text-zinc-500">{entry.workspacePath}</p>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </section>
+                      )
+                    })}
+                  </div>
+                )}
+              </section>
+            )
+          })}
+        </div>
+      )}
+
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950/40 px-3 py-2">
+        <p className="text-[11px] text-zinc-400">{selectedMessage}</p>
+        {error && <p role="alert" className="mt-2 text-[11px] text-amber-300">{error}</p>}
+      </div>
+
+      <button
+        type="button"
+        onClick={onOpenSelected}
+        disabled={openDisabled}
+        aria-label="Open selected asset"
+        className="px-3 py-2 bg-violet-600 hover:bg-violet-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white text-xs rounded-lg transition-colors font-medium"
+      >
+        {opening ? 'Opening…' : 'Open selected asset'}
+      </button>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // GeneratePage
 // ---------------------------------------------------------------------------
 
 export default function GeneratePage(): JSX.Element {
   const [unloadStatus, setUnloadStatus] = useState<'idle' | 'done'>('idle')
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH)
-  const [openPanel, setOpenPanel] = useState<'export' | 'decimate' | 'smooth' | 'import' | 'light' | null>(null)
-  const [lightSettings, setLightSettings] = useState<LightSettings>(DEFAULT_LIGHT_SETTINGS)
+  const [openPanel, setOpenPanel] = useState<GenerateOpenPanel>(null)
   const [decimating, setDecimating] = useState(false)
   const [smoothing, setSmoothing] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [libraryEntries, setLibraryEntries] = useState<ProjectedAssetLibraryEntry[]>([])
+  const [librarySelectedEntryId, setLibrarySelectedEntryId] = useState<string | null>(null)
+  const [libraryLoaded, setLibraryLoaded] = useState(false)
+  const [libraryLoading, setLibraryLoading] = useState(false)
+  const [libraryOpening, setLibraryOpening] = useState(false)
+  const [libraryError, setLibraryError] = useState<string | null>(null)
+  const [librarySearchQuery, setLibrarySearchQuery] = useState('')
+  const [librarySortMode, setLibrarySortMode] = useState<AssetLibrarySortMode>('type')
+  const [libraryCollapsedSectionKeys, setLibraryCollapsedSectionKeys] = useState<string[]>(() => getDefaultAssetLibraryCollapsedSectionKeys())
   const [gizmoMode, setGizmoMode] = useState<'translate' | 'rotate' | 'scale' | null>(null)
   const dragging = useRef(false)
   // Populated by Viewer3D — undoes the latest live gizmo transform, if any.
   const gizmoUndoRef = useRef<(() => boolean) | null>(null)
 
+  const lightSettings = useAppStore((s) => s.lightSettings)
+  const setLightSettings = useAppStore((s) => s.setLightSettings)
   const isGenerating = useAppStore((s) =>
     s.currentJob?.status === 'uploading' || s.currentJob?.status === 'generating'
   )
@@ -332,6 +575,7 @@ export default function GeneratePage(): JSX.Element {
   const canUndo = useAppStore((s) => s.historyIndex > 0)
   const canRedo = useAppStore((s) => s.historyIndex < s.meshHistory.length - 1)
   const { optimizeMesh, smoothMesh, importMesh } = useApi()
+  const assetLibraryService = useMemo(() => getDefaultAssetLibraryService(), [])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -366,6 +610,11 @@ export default function GeneratePage(): JSX.Element {
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [hasModel, meshSelected])
+
+  useEffect(() => {
+    if (openPanel !== 'library' || libraryLoaded || libraryLoading) return
+    void loadLibraryEntries()
+  }, [openPanel, libraryLoaded, libraryLoading])
 
   async function handleUnloadAll() {
     await window.electron.model.unloadAll()
@@ -417,6 +666,70 @@ export default function GeneratePage(): JSX.Element {
       pushMeshUrl(url)
     } finally {
       setImporting(false)
+    }
+  }
+
+  async function loadLibraryEntries() {
+    setLibraryLoading(true)
+    setLibraryError(null)
+    try {
+      const result = await assetLibraryService.list()
+      if (!result.success) {
+        setLibraryLoaded(false)
+        setLibraryEntries([])
+        setLibrarySelectedEntryId(null)
+        setLibraryError(result.error.message)
+        return
+      }
+      setLibraryEntries(result.entries)
+      setLibrarySelectedEntryId((current) => current && result.entries.some((entry) => entry.id === current)
+        ? current
+        : result.entries.find(isAssetLibraryEntryOpenable)?.id ?? result.entries[0]?.id ?? null)
+      setLibraryLoaded(true)
+    } catch (err) {
+      setLibraryLoaded(false)
+      setLibraryEntries([])
+      setLibrarySelectedEntryId(null)
+      setLibraryError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLibraryLoading(false)
+    }
+  }
+
+  async function handleOpenSelectedLibraryEntry() {
+    const selectedEntry = libraryEntries.find((entry) => entry.id === librarySelectedEntryId) ?? null
+    if (!selectedEntry) {
+      setLibraryError('Select an asset before opening it in Generate.')
+      return
+    }
+    if (!isAssetLibraryEntryOpenable(selectedEntry)) {
+      setLibraryError(describeAssetLibraryOpenability(selectedEntry))
+      return
+    }
+
+    setLibraryOpening(true)
+    setLibraryError(null)
+    try {
+      const result = await assetLibraryService.open(buildAssetLibraryOpenRequest(selectedEntry))
+      if (!result.success) {
+        setLibraryError(result.error.message)
+        return
+      }
+      const target = resolveAssetLibraryOpenTarget(result.entry)
+      const selection = createAssetLibraryOpenJob(result.entry, target)
+      if (!selection) {
+        setLibraryError(describeAssetLibraryOpenability(result.entry))
+        return
+      }
+      setLibraryEntries((currentEntries) => currentEntries.map((entry) => entry.id === result.entry.id ? result.entry : entry))
+      setLibrarySelectedEntryId(result.entry.id)
+      setCurrentJob(selection.job)
+      pushMeshUrl(selection.historyUrl)
+      setOpenPanel((currentPanel) => resolveOpenPanelAfterLibrarySelection(currentPanel))
+    } catch (err) {
+      setLibraryError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLibraryOpening(false)
     }
   }
 
@@ -570,6 +883,39 @@ export default function GeneratePage(): JSX.Element {
                   </div>
                 </button>
               </div>
+            )}
+          </div>
+
+          <div className="relative">
+            <AssetLibraryToggleButton
+              open={openPanel === 'library'}
+              disabled={importing || libraryOpening}
+              onToggle={() => {
+                setLibraryError(null)
+                setOpenPanel((panel) => (panel === 'library' ? null : 'library'))
+              }}
+            />
+            {openPanel === 'library' && (
+              <AssetLibraryPopover
+                entries={libraryEntries}
+                selectedEntryId={librarySelectedEntryId}
+                loading={libraryLoading}
+                opening={libraryOpening}
+                error={libraryError}
+                searchQuery={librarySearchQuery}
+                sortMode={librarySortMode}
+                collapsedSectionKeys={libraryCollapsedSectionKeys}
+                onSelectEntry={(entryId) => {
+                  setLibraryError(null)
+                  setLibrarySelectedEntryId(entryId)
+                }}
+                onSearchQueryChange={setLibrarySearchQuery}
+                onSortModeChange={setLibrarySortMode}
+                onToggleSection={(sectionKey) => setLibraryCollapsedSectionKeys((current) => toggleAssetLibrarySectionKey(current, sectionKey))}
+                onOpenSelected={() => { void handleOpenSelectedLibraryEntry() }}
+                onRefresh={() => { void loadLibraryEntries() }}
+                onClose={() => setOpenPanel(null)}
+              />
             )}
           </div>
 

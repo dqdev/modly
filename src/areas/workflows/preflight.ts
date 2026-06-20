@@ -1,5 +1,6 @@
 import type { Workflow, WFNode } from '@shared/types/electron.d'
 import { getWorkflowExtension, type WorkflowExtension } from './mockExtensions'
+import { isPassthrough, isBranchConsumer, resolveDataSource, nearestUpstreamWaits } from './nodeBehaviors'
 
 type DataType = 'image' | 'text' | 'mesh'
 
@@ -55,10 +56,16 @@ export function validateWorkflowPreflight(
 ): WorkflowPreflightIssue[] {
   const issues: WorkflowPreflightIssue[] = []
   const nodeMap = new Map(workflow.nodes.map((node) => [node.id, node]))
-  const outputTypes = new Map<string, DataType | undefined>()
 
+  const outputTypes = new Map<string, DataType | undefined>()
   for (const node of workflow.nodes) {
     outputTypes.set(node.id, getNodeOutputType(node, allExtensions))
+  }
+  // Passthrough nodes inherit their resolved upstream source's type.
+  for (const node of workflow.nodes) {
+    if (!isPassthrough(node.type)) continue
+    const realSourceId = resolveDataSource(node.id, workflow.edges, nodeMap)
+    if (realSourceId && realSourceId !== node.id) outputTypes.set(node.id, outputTypes.get(realSourceId))
   }
 
   for (const node of workflow.nodes) {
@@ -67,6 +74,19 @@ export function validateWorkflowPreflight(
         key: `${node.id}:current-mesh`,
         nodeId: node.id,
         message: `${nodeLabel(node, allExtensions)} is set to Current Scene, but no mesh is loaded.`,
+      })
+    }
+
+    // A node fed by two different Wait branches can't be scheduled into a single
+    // branch — it would run before either branch produces its mesh.
+    if (
+      isBranchConsumer(node.type) &&
+      nearestUpstreamWaits(node.id, workflow.edges, nodeMap).size > 1
+    ) {
+      pushIssue(issues, {
+        key: `${node.id}:wait-merge`,
+        nodeId: node.id,
+        message: `${nodeLabel(node, allExtensions)} merges two Wait branches, which isn't supported. Route it through a single Wait.`,
       })
     }
 

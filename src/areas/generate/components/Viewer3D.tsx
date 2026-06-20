@@ -16,8 +16,8 @@ import SplatViewer, { type SplatViewerHandle } from './SplatViewer'
 import { useGeneration } from '@shared/hooks/useGeneration'
 import { useAppStore } from '@shared/stores/appStore'
 import { ViewerToolbar, type ViewMode } from './ViewerToolbar'
-import type { LightSettings } from '../GeneratePage'
-import { DEFAULT_LIGHT_SETTINGS } from '../GeneratePage'
+import type { LightSettings } from '@shared/stores/appStore'
+import { DEFAULT_LIGHT_SETTINGS } from '@shared/stores/appStore'
 
 export type GizmoMode = 'translate' | 'rotate' | 'scale'
 

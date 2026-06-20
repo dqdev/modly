@@ -10,6 +10,7 @@ import { useAppStore }         from '@shared/stores/appStore'
 import { useExtensionsStore }  from '@shared/stores/extensionsStore'
 import { useNavStore }         from '@shared/stores/navStore'
 import { useWorkflowRunStore } from '@areas/workflows/workflowRunStore'
+import { useWaitButton } from '@areas/workflows/useWaitButton'
 import { buildAllWorkflowExtensions, getWorkflowExtension } from '@areas/workflows/mockExtensions'
 import { validateWorkflowPreflight } from '@areas/workflows/preflight'
 import type { WorkflowExtension } from '@areas/workflows/mockExtensions'
@@ -335,10 +336,7 @@ function TextParamRow({ nodeId, nodes, onPatch }: { nodeId: string; nodes: FlowN
 }
 
 function WaitParamRow({ nodeId }: { nodeId: string }) {
-  const status       = useWorkflowRunStore((s) => s.runState.status)
-  const activeNodeId = useWorkflowRunStore((s) => s.activeNodeId)
-  const continueRun  = useWorkflowRunStore((s) => s.continueRun)
-  const isPaused     = status === 'paused' && activeNodeId === nodeId
+  const { waitState, canContinue, isRunning, label, buttonClass, onContinue } = useWaitButton(nodeId)
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -348,15 +346,29 @@ function WaitParamRow({ nodeId }: { nodeId: string }) {
         </svg>
         <span className="text-[11px] font-medium text-zinc-300">Wait</span>
       </div>
-      {isPaused ? (
+      {waitState ? (
         <button
-          onClick={continueRun}
-          className="w-full flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25 transition-colors text-[11px] font-medium animate-pulse"
+          onClick={onContinue}
+          disabled={!canContinue}
+          className={`w-full flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-md border transition-colors text-[11px] font-medium ${buttonClass} ${
+            canContinue ? (waitState === 'pending' ? 'animate-pulse' : '') : 'opacity-40 cursor-not-allowed'
+          }`}
         >
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
-            <polygon points="5 3 19 12 5 21 5 3"/>
-          </svg>
-          Continue
+          {isRunning ? (
+            <>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="animate-spin">
+                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+              </svg>
+              Running…
+            </>
+          ) : (
+            <>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+              </svg>
+              {label}
+            </>
+          )}
         </button>
       ) : (
         <p className="text-[10px] text-zinc-600 italic px-0.5">

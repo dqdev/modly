@@ -1,402 +1,165 @@
-import { useState } from 'react'
 import type { AnyExtension } from '@shared/types/electron.d'
+import type { ExtensionNode } from '@shared/types/electron.d'
 export type { AnyExtension as Extension }
 export type { ExtensionNode } from '@shared/types/electron.d'
+
+import {
+  DownloadMap,
+  ICONS,
+  IOBadge,
+  NodeInstallControl,
+  StatusBadge,
+  TypePill,
+  extInstallSummary,
+  getNodeState,
+} from './extensionShared'
 
 interface Props {
   ext:              AnyExtension
   installedIds:     string[]
-  downloading:      Record<string, {
-    percent: number
-    file?: string
-    fileIndex?: number
-    totalFiles?: number
-    status?: string
-    bytesDownloaded?: number
-    totalBytes?: number
-    stalledSeconds?: number
-    paused?: boolean
-  }>
+  downloading:      DownloadMap
   loadError?:       string
   disabled?:        boolean
-  onInstall:        (node: import('@shared/types/electron.d').ExtensionNode, fullId: string) => void
-  onPauseDownload?: (fullId: string) => void
-  onCancelDownload?: (fullId: string) => void
-  onUninstall:      (extId: string) => void
-  onUninstallNode?: (fullId: string) => void
-  onRepaired?:      () => void
-  onSynced?:        () => void
+  onInstall:        (node: ExtensionNode, fullId: string) => void
+  onInstallAll:     (ext: AnyExtension) => void
+  onPauseDownload:  (fullId: string) => void
+  onCancelDownload: (fullId: string) => void
+  onOpen:           (ext: AnyExtension) => void
 }
 
-const TYPE_BADGE: Record<string, { label: string; cls: string }> = {
-  model:   { label: 'Model',   cls: 'bg-accent/15 border-accent/25 text-accent-light' },
-  process: { label: 'Process', cls: 'bg-emerald-500/15 border-emerald-500/25 text-emerald-400' },
-}
-
-function TruncatedText({
-  content,
-  className,
-}: {
-  content?: string
-  className: string
-}): JSX.Element {
-  const text = content?.trim() || '—'
-  return <span className={className}>{text}</span>
-}
-
-export function ExtensionCard({ ext, installedIds, downloading, loadError, disabled, onInstall, onPauseDownload, onCancelDownload, onUninstall, onUninstallNode, onRepaired, onSynced }: Props): JSX.Element {
-  const [repairing,   setRepairing]   = useState(false)
-  const [repairError, setRepairError] = useState<string | null>(null)
-  const [syncing,     setSyncing]     = useState(false)
-  const [syncError,   setSyncError]   = useState<string | null>(null)
-
+export function ExtensionCard({
+  ext, installedIds, downloading, loadError, disabled,
+  onInstall, onInstallAll, onPauseDownload, onCancelDownload, onOpen,
+}: Props): JSX.Element {
+  const isModel = ext.type === 'model'
   const isLocal = typeof ext.source === 'string' && ext.source.startsWith('local://')
-  const localPath = isLocal ? ext.source!.replace('local://', '') : null
+  const { total, done, installing, hasAvailable } = extInstallSummary(ext, installedIds, downloading)
 
-  const badge = TYPE_BADGE[ext.type] ?? TYPE_BADGE.model
-
-  async function handleRepair() {
-    setRepairing(true)
-    setRepairError(null)
-    const result = await window.electron.extensions.repair(ext.id)
-    setRepairing(false)
-    if (result.success) {
-      onRepaired?.()
-    } else {
-      setRepairError(result.error ?? 'Repair failed')
+  const handleOpen = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return
+    onOpen(ext)
+  }
+  const handleKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onOpen(ext)
     }
   }
 
-  async function handleSync() {
-    setSyncing(true)
-    setSyncError(null)
-    try {
-      const result = await window.electron.extensions.reload()
-      if (!result.success) {
-        setSyncError(result.error ?? 'Sync failed')
-      } else {
-        onSynced?.()
-      }
-    } catch (e) {
-      setSyncError(String(e))
-    } finally {
-      setSyncing(false)
-    }
-  }
-
-  function formatBytes(bytes?: number): string {
-    if (!bytes || bytes <= 0) return '0 B'
-    const units = ['B', 'KB', 'MB', 'GB']
-    let value = bytes
-    let idx = 0
-    while (value >= 1024 && idx < units.length - 1) {
-      value /= 1024
-      idx += 1
-    }
-    return `${value >= 10 || idx === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[idx]}`
+  let status: JSX.Element
+  if (loadError) {
+    status = <StatusBadge tone="amber">Load error</StatusBadge>
+  } else if (installing) {
+    status = <StatusBadge tone="violet">Installing…</StatusBadge>
+  } else if (!isModel) {
+    status = <StatusBadge tone="green">Ready</StatusBadge>
+  } else if (done === total) {
+    status = <StatusBadge tone="green">All nodes ready</StatusBadge>
+  } else {
+    status = <StatusBadge tone="amber">{done}/{total} nodes installed</StatusBadge>
   }
 
   return (
-    <div className="flex flex-col gap-3 px-4 py-4 rounded-2xl border border-zinc-800 bg-zinc-900/60 hover:border-zinc-700 transition-all overflow-hidden">
-
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={handleOpen}
+      onKeyDown={handleKey}
+      aria-label={`${ext.name} — open details`}
+      className="relative flex flex-col min-h-[218px] p-4 rounded-2xl bg-zinc-900/60 border border-zinc-800 overflow-hidden cursor-pointer transition-all duration-150 hover:bg-zinc-900 hover:border-zinc-700 hover:-translate-y-0.5 hover:shadow-[0_14px_30px_-14px_rgba(0,0,0,0.7)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+    >
       {/* Header */}
-      <div className="flex items-start gap-2.5">
-        <div className="shrink-0 w-8 h-8 rounded-xl bg-zinc-800 border border-zinc-700/50 flex items-center justify-center text-zinc-400">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/>
-            <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
-            <line x1="12" y1="22.08" x2="12" y2="12"/>
-          </svg>
+      <div className="flex items-start gap-3">
+        <div className={`shrink-0 w-10 h-10 p-2.5 rounded-[11px] bg-zinc-800 ring-1 ring-inset ring-zinc-700/50 ${isModel ? 'text-accent-light' : 'text-emerald-400'}`}>
+          {isModel ? ICONS.spark : ICONS.cube}
         </div>
-
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <TruncatedText content={ext.name} className="text-xs font-semibold text-zinc-200 truncate leading-tight max-w-full" />
-
-            {/* Type badge */}
-            <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md border text-[10px] font-semibold shrink-0 ${badge.cls}`}>
-              {badge.label}
-            </span>
-
-            {/* Local badge */}
-            {isLocal && (
-              <span
-                title={localPath ?? ''}
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-orange-500/15 border border-orange-500/25 text-orange-400 text-[10px] font-semibold shrink-0 cursor-default"
-              >
-                <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
-                </svg>
-                Local
-              </span>
-            )}
-
-            {/* Trust badge — only shown for official extensions */}
-            {ext.trusted && (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-zinc-800/80 border border-zinc-700/40 text-zinc-400 text-[10px] font-medium shrink-0">
-                <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-                  <polyline points="9 12 11 14 15 10"/>
-                </svg>
-                Official
-              </span>
-            )}
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-zinc-100 truncate">{ext.name}</span>
+            <TypePill type={ext.type} />
           </div>
-
-          <div className="flex items-center gap-1.5 mt-0.5">
-            {ext.version && (
-              <span className="text-[10px] text-zinc-500 font-mono">v{ext.version}</span>
+          <div className="flex items-center gap-1.5 mt-1 text-[11px] text-zinc-600 flex-wrap">
+            {ext.version && <span className="font-mono text-zinc-500">v{ext.version}</span>}
+            {ext.version && ext.author && <span className="opacity-50">·</span>}
+            {ext.author && <span>{ext.author}</span>}
+            {ext.trusted && (
+              <>
+                <span className="opacity-50">·</span>
+                <span className="inline-flex items-center gap-1 text-zinc-500">
+                  <span className="w-[11px] h-[11px] text-accent-light">{ICONS.shield}</span>
+                  Official
+                </span>
+              </>
             )}
-            {ext.author && (
-              <span className="text-[10px] text-zinc-600">{ext.author}</span>
+            {isLocal && (
+              <>
+                <span className="opacity-50">·</span>
+                <span className="text-orange-400/80">Local</span>
+              </>
             )}
           </div>
         </div>
-
-        {/* Uninstall button */}
-        {!ext.builtin && (
-          <div className="flex items-center gap-1 shrink-0">
-            {/* Sync button — only for local extensions */}
-            {isLocal && (
-              <button
-                onClick={handleSync}
-                disabled={syncing || disabled}
-                title={syncing ? 'Syncing…' : 'Sync — reload extension from local folder'}
-                className="p-1.5 rounded-lg text-zinc-600 hover:text-orange-400 hover:bg-orange-950/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                <svg
-                  width="11" height="11" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" strokeWidth="2" strokeLinecap="round"
-                  className={syncing ? 'animate-spin' : ''}
-                >
-                  <polyline points="23 4 23 10 17 10"/>
-                  <path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
-                </svg>
-              </button>
-            )}
-            <button
-              onClick={() => onUninstall(ext.id)}
-              disabled={disabled}
-              title={isLocal
-                ? (disabled ? 'Cannot unlink while an install is in progress' : 'Unlink local extension (removes symlink only, keeps source folder)')
-                : (disabled ? 'Cannot uninstall while an install is in progress' : 'Uninstall extension')}
-              className="shrink-0 p-1.5 rounded-lg text-zinc-700 hover:text-red-400 hover:bg-red-950/30 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-zinc-700 disabled:hover:bg-transparent"
-            >
-              {isLocal ? (
-                /* Unlink icon (chain-break) */
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
-                  <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
-                  <line x1="2" y1="2" x2="22" y2="22"/>
-                </svg>
-              ) : (
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                  <polyline points="3 6 5 6 21 6"/>
-                  <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
-                  <path d="M10 11v6M14 11v6"/>
-                  <path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
-                </svg>
-              )}
-            </button>
-          </div>
-        )}
       </div>
 
-      {/* Load error / repair error / sync error */}
-      {(loadError || repairError || syncError) && (
-        <div className="flex items-start gap-1.5 px-2.5 py-2 rounded-lg bg-red-950/30 border border-red-800/30">
-          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-red-400 shrink-0 mt-px">
-            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-          </svg>
-          <p className="text-[10px] text-red-400 break-all">{syncError ?? repairError ?? loadError}</p>
-        </div>
-      )}
-
-      {/* Local path display */}
-      {isLocal && localPath && (
-        <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-orange-950/20 border border-orange-800/20">
-          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-orange-500/70 shrink-0">
-            <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>
-          </svg>
-          <p className="text-[10px] text-orange-400/70 truncate font-mono" title={localPath}>{localPath}</p>
-        </div>
-      )}
-
-      {/* Repair — always visible for model extensions */}
-      {ext.type === 'model' && (
-        <button
-          onClick={handleRepair}
-          disabled={repairing || disabled}
-          className="flex items-center justify-center gap-1 w-full py-1 rounded-md bg-zinc-800/60 border border-zinc-700/40 text-[10px] font-semibold text-zinc-400 hover:bg-zinc-700/50 hover:text-zinc-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {repairing ? (
-            <div className="w-2.5 h-2.5 rounded-full border border-zinc-500/40 border-t-zinc-300 animate-spin" />
-          ) : (
-            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/>
-            </svg>
-          )}
-          {repairing ? 'Repairing…' : 'Repair'}
-        </button>
-      )}
-
       {/* Description */}
-      {ext.description && (
-        <p className="text-[11px] text-zinc-500 leading-relaxed line-clamp-2">{ext.description}</p>
+      <p className="mt-3 text-xs leading-5 text-zinc-500 line-clamp-2 min-h-[2.5rem]">
+        {ext.description?.trim() || '—'}
+      </p>
+
+      {/* Load error */}
+      {loadError && (
+        <div className="mt-2 px-2.5 py-1.5 rounded-lg bg-red-950/30 border border-red-800/30">
+          <p className="text-[10px] text-red-400 line-clamp-1 break-all">{loadError}</p>
+        </div>
       )}
 
       {/* Nodes */}
       {ext.nodes.length > 0 && (
-        <div className="flex flex-col gap-2 pt-2 border-t border-zinc-800/60">
+        <div className="mt-3 flex flex-col gap-1.5">
           {ext.nodes.map((node) => {
-            const fullId        = `${ext.id}/${node.id}`
-            const hasWeights    = !!node.hfRepo
-            const installed     = !hasWeights || installedIds.includes(fullId)
-            const dlInfo        = downloading[fullId]
-            const isDownloading = dlInfo !== undefined
-            const dlPercent     = dlInfo?.percent ?? 0
-            const dlFile        = dlInfo?.file
-            const dlFileIndex   = dlInfo?.fileIndex
-            const dlTotalFiles  = dlInfo?.totalFiles
-            const dlStatus      = dlInfo?.status
-            const dlBytes       = dlInfo?.bytesDownloaded
-            const dlTotalBytes  = dlInfo?.totalBytes
-            const dlStalled     = dlInfo?.stalledSeconds ?? 0
-            const dlPaused      = dlInfo?.paused ?? false
-
+            const fullId = `${ext.id}/${node.id}`
+            const state = getNodeState(ext.id, node, installedIds, downloading)
             return (
-              <div key={node.id} className="flex items-center gap-2">
-                {/* Node name */}
-                <TruncatedText content={node.name} className="text-[11px] text-zinc-400 font-medium shrink-0 truncate max-w-[5rem]" />
-
-                {/* I/O types */}
-                <div className="flex items-center gap-1 shrink-0">
-                  <span className="text-[9px] text-zinc-600">{node.input}</span>
-                  <svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-zinc-700 shrink-0">
-                    <path d="M5 12h14M13 6l6 6-6 6"/>
-                  </svg>
-                  <span className="text-[9px] text-zinc-600">{node.output}</span>
+              <div
+                key={node.id}
+                className="flex items-center justify-between gap-2.5 px-2.5 py-1.5 rounded-lg bg-white/[0.02] border border-zinc-800"
+              >
+                <div className="flex flex-col gap-1 min-w-0 items-start">
+                  <span className="text-xs font-medium text-zinc-200 truncate max-w-full">{node.name}</span>
+                  <IOBadge node={node} />
                 </div>
-
-                {/* Status (only for nodes that need model weights) */}
-                <div className="flex-1 min-w-0">
-                  {!hasWeights ? (
-                    <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-950/40 border border-emerald-800/30">
-                      <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className="text-emerald-400 shrink-0">
-                        <polyline points="20 6 9 17 4 12"/>
-                      </svg>
-                      <span className="text-[10px] font-semibold text-emerald-400">Ready</span>
-                    </div>
-                  ) : isDownloading ? (
-                    <div className="flex flex-col gap-1">
-                      <div className="flex items-center justify-between">
-                        <TruncatedText
-                          content={dlPaused ? 'Paused' : (dlFile ?? dlStatus ?? 'Downloading…')}
-                          className="text-[10px] text-zinc-500 truncate max-w-[140px]"
-                        />
-                        <span className="text-[10px] font-mono text-zinc-400 shrink-0 ml-1">
-                          {dlFileIndex && dlTotalFiles ? `${dlFileIndex}/${dlTotalFiles} · ${dlPercent}%` : `${dlPercent}%`}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <TruncatedText content={dlPaused ? 'Paused' : (dlStatus ?? 'Downloading…')} className="text-[9px] text-zinc-600 truncate" />
-                        <span className={`text-[9px] shrink-0 ${dlStalled >= 30 ? 'text-amber-400' : 'text-zinc-600'}`}>
-                          {dlStalled >= 30 ? `No progress ${dlStalled}s` : formatBytes(dlBytes)}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2">
-                        <TruncatedText
-                          content={dlTotalBytes && dlTotalBytes > 0
-                            ? `${formatBytes(dlBytes)} / ${formatBytes(dlTotalBytes)}`
-                            : formatBytes(dlBytes)}
-                          className="text-[9px] text-zinc-600 truncate"
-                        />
-                        {dlTotalBytes && dlTotalBytes > 0 && (
-                          <span className="text-[9px] text-zinc-600 shrink-0">
-                            {Math.min(100, Math.round(((dlBytes ?? 0) / dlTotalBytes) * 100))}%
-                          </span>
-                        )}
-                      </div>
-                      <div className="h-1 rounded-full bg-zinc-800 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full transition-all duration-300 ${dlPaused ? 'bg-zinc-500' : 'bg-accent'}`}
-                          style={{ width: `${dlPercent}%` }}
-                        />
-                      </div>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        <button
-                          onClick={() => dlPaused ? onInstall(node, fullId) : onPauseDownload?.(fullId)}
-                          title={dlPaused ? 'Resume download' : 'Pause download'}
-                          className="flex items-center justify-center gap-1 px-2 py-1 rounded-lg bg-zinc-800/70 border border-zinc-700/50 text-[10px] font-semibold text-zinc-300 hover:bg-zinc-700/80 transition-colors"
-                        >
-                          {dlPaused ? (
-                            <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor">
-                              <polygon points="5 3 19 12 5 21 5 3" />
-                            </svg>
-                          ) : (
-                            <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor">
-                              <rect x="6" y="4" width="4" height="16" rx="1" />
-                              <rect x="14" y="4" width="4" height="16" rx="1" />
-                            </svg>
-                          )}
-                          {dlPaused ? 'Resume' : 'Pause'}
-                        </button>
-                        <button
-                          onClick={() => onCancelDownload?.(fullId)}
-                          title="Cancel download"
-                          className="flex items-center justify-center gap-1 px-2 py-1 rounded-lg bg-red-950/30 border border-red-800/40 text-[10px] font-semibold text-red-300 hover:bg-red-950/50 transition-colors"
-                        >
-                          <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                            <line x1="18" y1="6" x2="6" y2="18"/>
-                            <line x1="6" y1="6" x2="18" y2="18"/>
-                          </svg>
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  ) : installed ? (
-                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-950/40 border border-emerald-800/30">
-                      <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" className="text-emerald-400 shrink-0">
-                        <polyline points="20 6 9 17 4 12"/>
-                      </svg>
-                      <TruncatedText content={node.name} className="text-[10px] font-semibold text-emerald-400 flex-1 truncate" />
-                      {onUninstallNode && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); onUninstallNode(fullId) }}
-                          disabled={disabled}
-                          title="Remove model weights"
-                          className="shrink-0 text-emerald-700 hover:text-red-400 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                        >
-                          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                            <polyline points="3 6 5 6 21 6"/>
-                            <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
-                          </svg>
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => !disabled && onInstall(node, fullId)}
+                {isModel && (
+                  <div className="shrink-0">
+                    <NodeInstallControl
+                      state={state}
                       disabled={disabled}
-                      className={`w-full flex items-center justify-center gap-1 px-2 py-1 rounded-lg border text-[10px] font-semibold transition-all ${
-                        !disabled
-                          ? 'bg-accent/15 border-accent/25 text-accent-light hover:bg-accent/25 hover:border-accent/40 cursor-pointer'
-                          : 'bg-zinc-800/40 border-zinc-700/30 text-zinc-600 cursor-not-allowed'
-                      }`}
-                    >
-                      <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
-                        <polyline points="7 10 12 15 17 10"/>
-                        <line x1="12" y1="15" x2="12" y2="3"/>
-                      </svg>
-                    </button>
-                  )}
-                </div>
+                      onInstall={() => onInstall(node, fullId)}
+                      onPause={() => onPauseDownload(fullId)}
+                      onResume={() => onInstall(node, fullId)}
+                      onCancel={() => onCancelDownload(fullId)}
+                    />
+                  </div>
+                )}
               </div>
             )
           })}
         </div>
       )}
+
+      {/* Footer */}
+      <div className="mt-auto pt-3 flex items-center justify-between gap-2">
+        {status}
+        {isModel && hasAvailable && !installing && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onInstallAll(ext) }}
+            disabled={disabled}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-accent/15 text-accent-light ring-1 ring-inset ring-accent/30 hover:bg-accent hover:text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-accent/15 disabled:hover:text-accent-light"
+          >
+            <span className="w-3 h-3">{ICONS.download}</span>
+            Install all
+          </button>
+        )}
+      </div>
     </div>
   )
 }

@@ -37,6 +37,13 @@ export interface GenerationOptions {
   modelParams: Record<string, any>
 }
 
+export interface LightSettings {
+  mainIntensity: number
+  mainColor: string
+  fillIntensity: number
+  fillColor: string
+}
+
 export interface AppToast {
   id: number
   message: string
@@ -49,6 +56,13 @@ const DEFAULT_OPTIONS: GenerationOptions = {
   enableTexture: false,
   textureResolution: 512,
   modelParams: {},
+}
+
+export const DEFAULT_LIGHT_SETTINGS: LightSettings = {
+  mainIntensity: 1.5,
+  mainColor: '#ffffff',
+  fillIntensity: 0.6,
+  fillColor: '#ffffff',
 }
 
 interface AppState {
@@ -121,6 +135,10 @@ interface AppState {
   setUseAtkinsonFont: (v: boolean) => void
   uiScale: UiScale
   setUiScale: (v: UiScale) => void
+
+  // 3D viewer lighting
+  lightSettings: LightSettings
+  setLightSettings: (settings: LightSettings) => void
 
   // Actions
   initApp: () => Promise<void>
@@ -221,6 +239,9 @@ export const useAppStore = create<AppState>()(
       uiScale: 'medium',
       setUiScale: (v) => set({ uiScale: v }),
 
+      lightSettings: DEFAULT_LIGHT_SETTINGS,
+      setLightSettings: (settings) => set({ lightSettings: settings }),
+
       currentJob: null,
       selectedImagePath: null,
       setSelectedImagePath: (path) => set({ selectedImagePath: path }),
@@ -274,6 +295,7 @@ export const useAppStore = create<AppState>()(
         showRamIndicator: state.showRamIndicator,
         useAtkinsonFont: state.useAtkinsonFont,
         uiScale: state.uiScale,
+        lightSettings: state.lightSettings,
       }),
     }
   )

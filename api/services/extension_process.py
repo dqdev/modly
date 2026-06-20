@@ -190,7 +190,7 @@ class ExtensionProcess:
                     try:
                         msg_queue.put(json.loads(line))
                     except json.JSONDecodeError:
-                        print(f"[{self.MODEL_ID}] bad JSON: {line}", file=sys.stderr)
+                        print(f"[{self.MODEL_ID}] {line}", file=sys.stderr)
         finally:
             msg_queue.put(None)  # sentinel: process is done
 

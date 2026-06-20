@@ -1,6 +1,14 @@
 // Type declarations for the Electron API exposed via preload
 export {}
 
+import type {
+  AssetLibraryListResult,
+  AssetLibraryOpenRequest,
+  AssetLibraryOpenResult,
+  AssetLibraryReadRequest,
+  AssetLibraryReadResult,
+} from './assetLibrary'
+
 // ─── Extension types ──────────────────────────────────────────────────────────
 
 export interface ExtensionNode {
@@ -205,6 +213,11 @@ declare global {
         listJobs: (collection: string) => Promise<unknown[]>
         saveJobMeta: (collection: string, filename: string, meta: unknown) => Promise<void>
         deleteJob: (collection: string, filename: string) => Promise<void>
+        library: {
+          list: () => Promise<AssetLibraryListResult>
+          read: (request: AssetLibraryReadRequest) => Promise<AssetLibraryReadResult>
+          open: (request: AssetLibraryOpenRequest) => Promise<AssetLibraryOpenResult>
+        }
       }
       setup: {
         check:        () => Promise<{ needed: boolean; defaultDataDir: string; platform: string; arch: string }>

@@ -127,7 +127,8 @@ async def _run_generation(job_id: str, image_bytes: bytes, params: dict, collect
     job.status = "running"
 
     def progress_cb(pct: int, step: str = "") -> None:
-        job.progress = pct
+        if pct > job.progress:
+            job.progress = pct
         if step:
             job.step = step
 
