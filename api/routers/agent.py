@@ -2,6 +2,7 @@
 Agent chat endpoint — runs an Ollama-powered tool-use loop against Modly's API.
 """
 import re
+import uuid
 import httpx
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -24,12 +25,15 @@ You help users generate 3D models from images, optimize meshes, and manage workf
 - **get_generation_status(job_id)** — Poll the status of an ongoing 3D generation job.
 - **list_workflows** — List all available workflows in Modly.
 - **run_workflow(workflow_id)** — Execute a workflow in Modly by its ID. If the user attached an image in their message, it will automatically be used as the workflow's input image.
+- **create_workflow(name, input_type, steps, description?)** — Create a new workflow from an ordered list of processing steps. Each step references an extension by its exact `id` and may override its params. The steps run in sequence, the output of one feeding the next. The input source is one of exactly three nodes — `image` (Image), `text` (Text), or `mesh` (Load 3D Mesh) — and an Add-to-Scene output node is appended automatically.
 
 ## Rules
 
 - Always use tools to act on the scene — never just describe what you would do.
 - If you need the current mesh path, call get_mesh_info first.
 - If you need to run a workflow but don't know the ID, call list_workflows first.
+- To create a workflow, ONLY use extension ids listed under "Available extensions" in the context. Never invent an id. Chain steps so each step's input type matches the previous step's output type.
+- For a workflow's input, `input_type` MUST be exactly one of: `image`, `text`, or `mesh`. These map to the Image, Text, and Load 3D Mesh nodes. Never invent another input. Pick the one matching the first step's expected input.
 - After each tool call, give a short one-sentence summary of what was done.
 - Always reply in the same language the user is writing in.
 - Be concise. No unnecessary explanations.\
@@ -138,7 +142,113 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_workflow",
+            "description": (
+                "Create a new Modly workflow from an ordered list of steps. "
+                "Each step references an extension by its exact id (see 'Available extensions' in context). "
+                "Steps run in sequence; do not include the input itself as a step."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Short human-readable name for the workflow."},
+                    "description": {"type": "string", "description": "Optional one-line description of what the workflow does."},
+                    "input_type": {
+                        "type": "string",
+                        "enum": ["image", "text", "mesh"],
+                        "description": (
+                            "The workflow's input source node. Exactly one of: "
+                            "'image' (Image node), 'text' (Text node), "
+                            "'mesh' (Load 3D Mesh node, uses the current scene mesh). "
+                            "Never use any other value."
+                        ),
+                    },
+                    "steps": {
+                        "type": "array",
+                        "description": "Ordered processing steps. Each runs after the previous one.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "extension_id": {
+                                    "type": "string",
+                                    "description": "Exact extension id from 'Available extensions' (e.g. 'mesh-optimizer/optimize').",
+                                },
+                                "params": {
+                                    "type": "object",
+                                    "description": "Optional param overrides, keyed by param id. Omit to use defaults.",
+                                },
+                            },
+                            "required": ["extension_id"],
+                        },
+                    },
+                },
+                "required": ["name", "input_type", "steps"],
+            },
+        },
+    },
 ]
+
+
+# Input kinds the agent may pick, mapped to the real Modly source-node types.
+# Keep this in sync with the node palette in WorkflowsPage.tsx.
+INPUT_NODES = {
+    "image": {"type": "imageNode", "data": {"enabled": True, "params": {}, "showInGenerate": True}},
+    "text":  {"type": "textNode",  "data": {"enabled": True, "params": {}}},
+    "mesh":  {"type": "meshNode",  "data": {"enabled": True, "params": {"source": "current"}}},
+}
+
+
+def _build_workflow_graph(name: str, description: str, input_type: str, steps: list[dict]) -> dict:
+    """Assemble a Modly workflow graph (nodes + edges) from a simplified step spec.
+
+    Layout: one source node (Image / Text / Load 3D Mesh), one extensionNode per
+    step, then an Add-to-Scene output node, all wired in a single linear chain with
+    workflowEdge edges. id/timestamps are left for the frontend to stamp
+    (crypto.randomUUID + ISO date), matching how the Workflows tab creates workflows.
+    """
+    spec = INPUT_NODES.get(input_type, INPUT_NODES["image"])
+    input_node = {
+        "id": uuid.uuid4().hex[:8],
+        "type": spec["type"],
+        "position": {"x": 250, "y": 50},
+        "data": {**spec["data"]},
+    }
+
+    ext_nodes = []
+    for i, step in enumerate(steps):
+        ext_nodes.append({
+            "id": uuid.uuid4().hex[:8],
+            "type": "extensionNode",
+            "position": {"x": 250, "y": 150 + i * 200},
+            "data": {
+                "extensionId": step["extension_id"],
+                "enabled": True,
+                "params": step.get("params") or {},
+            },
+        })
+
+    output_node = {
+        "id": uuid.uuid4().hex[:8],
+        "type": "outputNode",
+        "position": {"x": 250, "y": 150 + len(steps) * 200},
+        "data": {"enabled": True, "params": {}},
+    }
+
+    all_nodes = [input_node, *ext_nodes, output_node]
+    edges = [
+        {
+            "id": f"e-{all_nodes[i]['id']}-{all_nodes[i + 1]['id']}",
+            "source": all_nodes[i]["id"],
+            "target": all_nodes[i + 1]["id"],
+            "type": "workflowEdge",
+        }
+        for i in range(len(all_nodes) - 1)
+    ]
+
+    return {"name": name, "description": description, "nodes": all_nodes, "edges": edges}
 
 
 async def execute_tool(name: str, arguments: dict, context: dict) -> tuple[str, dict | None]:
@@ -217,6 +327,40 @@ async def execute_tool(name: str, arguments: dict, context: dict) -> tuple[str, 
                 payload = {"type": "run_workflow", "workflow_id": workflow_id, "workflow_name": match["name"]}
                 return f"Executing workflow '{match['name']}'…", payload
 
+            elif name == "create_workflow":
+                steps = arguments.get("steps") or []
+                if not steps:
+                    return "A workflow needs at least one step. Specify the extensions to chain.", None
+
+                input_type = arguments.get("input_type") or "image"
+                if input_type not in INPUT_NODES:
+                    return (
+                        f"Invalid input_type '{input_type}'. Use exactly one of: "
+                        f"image (Image node), text (Text node), mesh (Load 3D Mesh node).",
+                        None,
+                    )
+
+                extensions = context.get("extensions", [])
+                valid_ids = {e["id"] for e in extensions}
+                if valid_ids:
+                    unknown = [s.get("extension_id") for s in steps if s.get("extension_id") not in valid_ids]
+                    if unknown:
+                        avail = ", ".join(sorted(valid_ids)) or "(none installed)"
+                        return (
+                            f"Unknown extension id(s): {', '.join(map(str, unknown))}. "
+                            f"Use only these: {avail}.",
+                            None,
+                        )
+
+                wf = _build_workflow_graph(
+                    name=arguments.get("name") or "New Workflow",
+                    description=arguments.get("description") or "",
+                    input_type=input_type,
+                    steps=steps,
+                )
+                payload = {"type": "create_workflow", "workflow": wf}
+                return f"Created workflow '{wf['name']}' with {len(steps)} step(s).", payload
+
             else:
                 return f"Unknown tool: {name}", None
 
@@ -291,6 +435,20 @@ async def agent_chat(request: AgentChatRequest):
             messages.append({
                 "role": "system",
                 "content": "Scene context:\n" + "\n".join(ctx_lines),
+            })
+
+        extensions = request.context.get("extensions") or []
+        if extensions:
+            ext_lines = [
+                f"- {e['id']} ({e.get('input', '?')}→{e.get('output', '?')}): {e.get('name', e['id'])}"
+                for e in extensions
+            ]
+            messages.append({
+                "role": "system",
+                "content": (
+                    "Available extensions (use the exact id when creating workflows):\n"
+                    + "\n".join(ext_lines)
+                ),
             })
 
     for m in request.messages:

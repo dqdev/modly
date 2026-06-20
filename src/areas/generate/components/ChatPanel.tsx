@@ -9,6 +9,7 @@ import { buildAllWorkflowExtensions } from '@areas/workflows/mockExtensions'
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 import type { ThinkingMode } from '@shared/stores/agentStore'
+import type { Workflow } from '@shared/types/electron.d'
 
 interface Message {
   id: string
@@ -28,6 +29,7 @@ interface ActionDone {
     face_count?: number
     workflow_id?: string
     workflow_name?: string
+    workflow?: Omit<Workflow, 'id' | 'createdAt' | 'updatedAt'>
   } | null
 }
 
@@ -77,6 +79,7 @@ const TOOL_LABELS: Record<string, string> = {
   get_generation_status:'Checked generation',
   list_workflows:       'Listed workflows',
   run_workflow:         'Ran workflow',
+  create_workflow:      'Created workflow',
 }
 
 function ActionsCard({ actions, onUndo }: { actions: ActionDone[]; onUndo?: () => void }): JSX.Element {
@@ -126,6 +129,9 @@ function ActionsCard({ actions, onUndo }: { actions: ActionDone[]; onUndo?: () =
               )}
               {a.payload?.type === 'run_workflow' && (
                 <span className="text-violet-400">{a.payload.workflow_name}</span>
+              )}
+              {a.payload?.type === 'create_workflow' && a.payload.workflow && (
+                <span className="text-violet-400">{a.payload.workflow.name}</span>
               )}
             </div>
           ))}
@@ -265,6 +271,8 @@ export default function ChatPanel(): JSX.Element {
   const undoMesh         = useAppStore((s) => s.undoMesh)
 
   const workflows     = useWorkflowsStore((s) => s.workflows)
+  const saveWorkflow  = useWorkflowsStore((s) => s.save)
+  const setActiveWorkflow = useWorkflowsStore((s) => s.setActive)
   const { modelExtensions, processExtensions } = useExtensionsStore()
   const runWorkflow   = useWorkflowRunStore((s) => s.run)
   const runState      = useWorkflowRunStore((s) => s.runState)
@@ -321,6 +329,9 @@ export default function ChatPanel(): JSX.Element {
     if (currentJob?.outputUrl) ctx.currentMeshPath = currentJob.outputUrl.replace('/workspace/', '')
     if (meshStats?.triangles)  ctx.meshTriangles   = meshStats.triangles
     if (workflows.length > 0)  ctx.workflows       = workflows.map((w) => ({ id: w.id, name: w.name }))
+    if (allExtensions.length > 0) ctx.extensions   = allExtensions.map((e) => ({
+      id: e.id, name: e.name, input: e.input, output: e.output,
+    }))
     return ctx
   }
 
@@ -377,6 +388,13 @@ export default function ChatPanel(): JSX.Element {
         if (action.payload?.type === 'run_workflow' && action.payload.workflow_id) {
           const wf = workflows.find((w) => w.id === action.payload!.workflow_id)
           if (wf) { runWorkflow(wf, allExtensions, overrideImageData); setPendingWorkflow({ id: wf.id, name: wf.name }) }
+        }
+        if (action.payload?.type === 'create_workflow' && action.payload.workflow) {
+          const draft = action.payload.workflow as Omit<Workflow, 'id' | 'createdAt' | 'updatedAt'>
+          const now = new Date().toISOString()
+          const wf: Workflow = { ...draft, id: crypto.randomUUID(), createdAt: now, updatedAt: now }
+          const res = await saveWorkflow(wf)
+          if (res.success) setActiveWorkflow(wf.id)
         }
       }
     } catch (e: unknown) {
