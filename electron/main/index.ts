@@ -2,7 +2,7 @@ import { app, BrowserWindow, shell, session } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { setupIpcHandlers } from './ipc-handlers'
-import { PythonBridge } from './python-bridge'
+import { PythonBridge, API_BASE_URL } from './python-bridge'
 import { logger, archiveCurrentSession } from './logger'
 import { initAutoUpdater } from './updater'
 import { syncBuiltinExtensions } from './builtin-sync'
@@ -81,6 +81,30 @@ app.whenReady().then(async () => {
 
   // Clear Chromium disk cache on startup to recover from any corruption
   await session.defaultSession.clearCache()
+
+  // The renderer's static CSP <meta> tag (src/index.html) can't know the backend
+  // host at build time — PYTHON_API_URL may point at an arbitrary remote machine
+  // (e.g. a LAN GPU server). Browsers enforce the *intersection* of all active CSP
+  // policies, so the meta tag is kept deliberately broad for connect-src and this
+  // header is the one that actually narrows it down, using the real API_BASE_URL.
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const csp = [
+      "default-src 'self'",
+      "script-src 'self' 'wasm-unsafe-eval'",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "font-src 'self' https://fonts.gstatic.com",
+      "img-src 'self' data: blob: file:",
+      `connect-src 'self' blob: ${API_BASE_URL} https://api.github.com`,
+      "worker-src 'self' blob:"
+    ].join('; ')
+
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [csp]
+      }
+    })
+  })
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
