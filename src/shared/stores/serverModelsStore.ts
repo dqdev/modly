@@ -7,6 +7,10 @@ export type IoType = 'image' | 'text' | 'mesh'
 export interface ServerModelInfo {
   id:         string
   name:       string
+  // Owning extension's display name. Node names ("Generate Mesh") collide
+  // across extensions, so the two are shown together. Empty on servers that
+  // predate the field.
+  ext_name?:  string
   downloaded: boolean
   input:      IoType
   inputs?:    IoType[]
@@ -42,4 +46,8 @@ export const useServerModelsStore = create<ServerModelsStore>((set) => ({
 
 export function getServerModelInfo(modelId: string): ServerModelInfo | undefined {
   return useServerModelsStore.getState().models.find((m) => m.id === modelId)
+}
+
+export function serverModelLabel(m: ServerModelInfo): string {
+  return m.ext_name ? `${m.ext_name} · ${m.name}` : m.name
 }

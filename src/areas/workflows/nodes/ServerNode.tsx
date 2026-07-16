@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Handle, Position, useReactFlow } from '@xyflow/react'
 import { useAppStore } from '@shared/stores/appStore'
-import { useServerModelsStore } from '@shared/stores/serverModelsStore'
+import { serverModelLabel, useServerModelsStore } from '@shared/stores/serverModelsStore'
 import type { WFNodeData, ParamSchema } from '@shared/types/electron.d'
 import { useWorkflowRunStore } from '../workflowRunStore'
 import BaseNode from './BaseNode'
@@ -235,8 +235,8 @@ export default function ServerNode({ id, data, selected }: { id: string; data: W
             {!modelsLoaded && <option value="">Loading…</option>}
             {modelsLoaded && models.length === 0 && <option value="">No models found on server</option>}
             {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}{m.downloaded ? '' : ' (downloads on run)'}
+              <option key={m.id} value={m.id} title={serverModelLabel(m)}>
+                {serverModelLabel(m)}{m.downloaded ? '' : ' (downloads on run)'}
               </option>
             ))}
           </select>

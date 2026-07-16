@@ -103,6 +103,7 @@ def _discover_extensions() -> Dict[str, Tuple[type, dict]]:
                         "ext_id":           ext_id,
                         "node_id":          node["id"],
                         "name":             node.get("name", node["id"]),
+                        "ext_name":         manifest.get("name", ext_id),
                         "hf_repo":          node.get("hf_repo", ""),
                         "download_check":   node.get("download_check", ""),
                         "hf_skip_prefixes": node.get("hf_skip_prefixes", []),
@@ -285,6 +286,7 @@ class GeneratorRegistry:
             result.append({
                 "id":          model_id,
                 "name":        manifest.get("name", gen.DISPLAY_NAME),
+                "ext_name":    manifest.get("ext_name", ""),
                 "description": manifest.get("description", ""),
                 "version":     manifest.get("version", ""),
                 "vram_gb":     manifest.get("vram_gb", gen.VRAM_GB),
