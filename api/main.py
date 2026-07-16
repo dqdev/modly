@@ -55,8 +55,10 @@ app.include_router(export.router,          prefix="/export")
 app.include_router(workflow_runs.router,   prefix="/workflow-runs")
 app.include_router(agent.router)
 
-# Serve generated files from workspace — dynamic so path changes take effect immediately
-@app.get("/workspace/{full_path:path}")
+# Serve generated files from workspace — dynamic so path changes take effect immediately.
+# HEAD is served alongside GET so callers can probe for a file's existence here
+# without transferring it (see ensureServerMesh in workflowRunStore.ts).
+@app.api_route("/workspace/{full_path:path}", methods=["GET", "HEAD"])
 async def serve_workspace_file(full_path: str):
     import services.generator_registry as reg
     file_path = reg.WORKSPACE_DIR / full_path

@@ -1,9 +1,11 @@
 import asyncio
 import json
+import shutil
 import threading
 import time
 import traceback
 import uuid
+from pathlib import Path
 from typing import Dict
 from fastapi import APIRouter, File, Form, UploadFile, HTTPException, BackgroundTasks
 from services.generators.base import smooth_progress, GenerationCancelled
@@ -31,6 +33,32 @@ def _purge_old_jobs() -> None:
         _cancelled.discard(jid)
         _cancel_events.pop(jid, None)
         _completed_at.pop(jid, None)
+
+
+_MESH_UPLOAD_DIR = "Uploads"
+_MESH_UPLOAD_EXTS = (".glb", ".obj", ".stl", ".ply")
+
+
+@router.post("/upload-mesh")
+async def upload_mesh(mesh: UploadFile = File(...)):
+    """Copy a client-local mesh into this server's workspace.
+
+    A mesh_path param only means something on the machine this API runs on. When
+    the mesh was produced on the client (a process extension's output, a file the
+    user picked) that path does not exist here, so the client uploads the bytes
+    first and passes back the workspace-relative path this returns.
+    """
+    ext = Path(mesh.filename or "").suffix.lower()
+    if ext not in _MESH_UPLOAD_EXTS:
+        raise HTTPException(400, f"Unsupported mesh format: {ext or '(none)'}")
+
+    dest_dir = reg.WORKSPACE_DIR / _MESH_UPLOAD_DIR
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    name = f"{int(time.time())}_{uuid.uuid4().hex[:8]}{ext}"
+    with open(dest_dir / name, "wb") as f:
+        shutil.copyfileobj(mesh.file, f)
+
+    return {"path": f"{_MESH_UPLOAD_DIR}/{name}"}
 
 
 @router.post("/from-image")

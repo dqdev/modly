@@ -149,6 +149,37 @@ async function ensureLocalFile(path: string, workspaceDir: string): Promise<stri
   return dl.localPath
 }
 
+// A model node's `mesh_path` param is read by the generator on the API server's
+// own filesystem, so a path is only usable there if the file exists there. Mesh
+// outputs that came from the API (model generation) already do; ones produced on
+// this machine (a process extension's output, a mesh the user picked) never do,
+// and with a remote API (see PYTHON_API_URL) a re-based workspace path silently
+// points at nothing. Same ambiguity as ensureLocalFile, resolved the same way:
+// ask rather than guess — probe the server, and upload only when it comes up short.
+async function ensureServerMesh(filePath: string, ctx: RunContext): Promise<string> {
+  const norm = filePath.replace(/\\/g, '/')
+  const rel  = norm.startsWith(ctx.workspaceDir)
+    ? norm.slice(ctx.workspaceDir.length).replace(/^\//, '')
+    : undefined
+
+  if (rel) {
+    try {
+      await ctx.client.head(`/workspace/${rel}`)
+      return rel
+    } catch { /* 404 — the server doesn't have it; upload below */ }
+  }
+
+  const local  = await ensureLocalFile(filePath, ctx.workspaceDir)
+  const base64 = await window.electron.fs.readFileBase64(local)
+  const bytes  = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+  const fd     = new FormData()
+  fd.append('mesh', new Blob([bytes]), local.split(/[\\/]/).pop() ?? 'mesh.glb')
+  const { data } = await ctx.client.post<{ path: string }>(
+    '/generate/upload-mesh', fd, { headers: { 'Content-Type': 'multipart/form-data' } },
+  )
+  return data.path
+}
+
 // The inverse: a node output that IS real on local disk (a process-extension
 // result) but that the API server — which may be remote — has never seen, so a
 // naive `/workspace/<rel>` URL 404s when the viewer or a downstream export tries
@@ -290,10 +321,7 @@ async function executeExtensionNode(
 
     const extraParams: Record<string, unknown> = {}
     if (nodeInputMeshPath) {
-      const norm = nodeInputMeshPath.replace(/\\/g, '/')
-      extraParams.mesh_path = norm.startsWith(workspaceDir)
-        ? norm.slice(workspaceDir.length).replace(/^\//, '')
-        : norm
+      extraParams.mesh_path = await ensureServerMesh(nodeInputMeshPath, ctx)
     }
 
     const schemaDefaults = Object.fromEntries(
@@ -383,10 +411,7 @@ async function executeServerNode(
 
   const extraParams: Record<string, unknown> = {}
   if (nodeInputMeshPath) {
-    const norm = nodeInputMeshPath.replace(/\\/g, '/')
-    extraParams.mesh_path = norm.startsWith(workspaceDir)
-      ? norm.slice(workspaceDir.length).replace(/^\//, '')
-      : norm
+    extraParams.mesh_path = await ensureServerMesh(nodeInputMeshPath, ctx)
   }
 
   nodeInputPath = await runModelJob(
