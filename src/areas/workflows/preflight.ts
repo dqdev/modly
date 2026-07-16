@@ -1,4 +1,5 @@
 import type { Workflow, WFNode } from '@shared/types/electron.d'
+import { getServerModelInfo } from '@shared/stores/serverModelsStore'
 import { getWorkflowExtension, type WorkflowExtension } from './mockExtensions'
 import { isPassthrough, isBranchConsumer, resolveDataSource, nearestUpstreamWaits } from './nodeBehaviors'
 
@@ -40,7 +41,10 @@ function getNodeOutputType(node: WFNode, allExtensions: WorkflowExtension[]): Da
   if (node.type === 'textNode') return 'text'
   if (node.type === 'meshNode' || node.type === 'outputNode') return 'mesh'
   if (node.type === 'previewNode') return 'image'
-  if (node.type === 'serverNode') return 'mesh'
+  if (node.type === 'serverNode') {
+    const modelId = node.data.params?.modelId as string | undefined
+    return (modelId && getServerModelInfo(modelId)?.output) ?? 'mesh'
+  }
   if (node.type === 'extensionNode') {
     return getWorkflowExtension(node.data.extensionId ?? '', allExtensions)?.output
   }
@@ -93,21 +97,28 @@ export function validateWorkflowPreflight(
     }
 
     if (node.type === 'serverNode') {
-      if (!node.data.params?.modelId) {
+      const modelId = node.data.params?.modelId as string | undefined
+      if (!modelId) {
         pushIssue(issues, {
           key: `${node.id}:no-model`,
           nodeId: node.id,
           message: `${nodeLabel(node, allExtensions)} has no model selected.`,
         })
+        continue
       }
+      const modelInfo = getServerModelInfo(modelId)
+      const requiredTypes = [...new Set((modelInfo?.inputs ?? [modelInfo?.input ?? 'image']) as DataType[])]
       const incomingEdges = workflow.edges.filter((edge) => edge.target === node.id)
-      const hasImageInput = incomingEdges.some((edge) => outputTypes.get(edge.source) === 'image')
-      if (!hasImageInput) {
-        pushIssue(issues, {
-          key: `${node.id}:missing:image`,
-          nodeId: node.id,
-          message: `${nodeLabel(node, allExtensions)} needs an incoming image connection.`,
-        })
+
+      for (const requiredType of requiredTypes) {
+        const hasMatchingInput = incomingEdges.some((edge) => outputTypes.get(edge.source) === requiredType)
+        if (!hasMatchingInput) {
+          pushIssue(issues, {
+            key: `${node.id}:missing:${requiredType}`,
+            nodeId: node.id,
+            message: `${nodeLabel(node, allExtensions)} needs an incoming ${formatType(requiredType)} connection.`,
+          })
+        }
       }
       continue
     }

@@ -18,6 +18,7 @@ import { useWorkflowsStore } from '@shared/stores/workflowsStore'
 import { useExtensionsStore } from '@shared/stores/extensionsStore'
 import { useNavStore } from '@shared/stores/navStore'
 import { useAppStore } from '@shared/stores/appStore'
+import { getServerModelInfo } from '@shared/stores/serverModelsStore'
 import type { Workflow, WFNode, WFEdge, WFNodeData } from '@shared/types/electron.d'
 import { buildAllWorkflowExtensions, getWorkflowExtension } from './mockExtensions'
 import type { WorkflowExtension } from './mockExtensions'
@@ -750,7 +751,10 @@ function getNodeOutputType(node: Node | undefined, allExts: WorkflowExtension[])
   if (node.type === 'imageNode')  return 'image'
   if (node.type === 'meshNode')   return 'mesh'
   if (node.type === 'textNode')   return 'text'
-  if (node.type === 'serverNode') return 'mesh'
+  if (node.type === 'serverNode') {
+    const modelId = (node.data as WFNodeData)?.params?.modelId as string | undefined
+    return (modelId && getServerModelInfo(modelId)?.output) ?? 'mesh'
+  }
   return allExts.find((e) => e.id === (node.data as WFNodeData)?.extensionId)?.output
 }
 
@@ -762,7 +766,15 @@ function getNodeInputType(
   if (!node) return undefined
   if (node.type === 'outputNode')  return 'mesh'
   if (node.type === 'previewNode') return 'image'
-  if (node.type === 'serverNode')  return 'image'
+  if (node.type === 'serverNode') {
+    const modelId = (node.data as WFNodeData)?.params?.modelId as string | undefined
+    const info = modelId ? getServerModelInfo(modelId) : undefined
+    if (info?.inputs && info.inputs.length > 1 && targetHandle) {
+      const idx = parseInt(targetHandle.replace('input-', ''), 10)
+      return info.inputs[isNaN(idx) ? 0 : idx] ?? info.input
+    }
+    return info?.input ?? 'image'
+  }
   const ext = allExts.find((e) => e.id === (node.data as WFNodeData)?.extensionId)
   if (ext?.inputs && ext.inputs.length > 1 && targetHandle) {
     const idx = parseInt(targetHandle.replace('input-', ''), 10)

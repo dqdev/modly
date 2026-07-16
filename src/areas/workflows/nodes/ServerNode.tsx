@@ -1,22 +1,21 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Handle, Position, useReactFlow } from '@xyflow/react'
 import { useAppStore } from '@shared/stores/appStore'
-import { useApi } from '@shared/hooks/useApi'
+import { useServerModelsStore } from '@shared/stores/serverModelsStore'
 import type { WFNodeData, ParamSchema } from '@shared/types/electron.d'
 import { useWorkflowRunStore } from '../workflowRunStore'
 import BaseNode from './BaseNode'
 
 // ─── Handle colors ────────────────────────────────────────────────────────────
 
-const HANDLE_COLOR = { image: '#38bdf8', mesh: '#a78bfa' }
-const TAG_CLS = {
+const HANDLE_COLOR: Record<string, string> = { image: '#38bdf8', mesh: '#a78bfa', text: '#facc15' }
+const TAG_CLS: Record<string, string> = {
   image: 'border-sky-500/30 bg-sky-500/10 text-sky-400',
   mesh:  'border-violet-500/30 bg-violet-500/10 text-violet-400',
+  text:  'border-yellow-500/30 bg-yellow-500/10 text-yellow-400',
 }
 
 const inputCls = 'w-full bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1 text-[11px] text-zinc-200 focus:outline-none focus:border-accent/60'
-
-interface ServerModel { id: string; name: string; downloaded: boolean }
 
 // ─── Small numeric inputs (mirrors ExtensionNode's controls) ──────────────────
 
@@ -78,16 +77,12 @@ export default function ServerNode({ id, data, selected }: { id: string; data: W
   const { updateNodeData } = useReactFlow()
   const running = useWorkflowRunStore((s) => s.activeNodeId === id)
   const apiUrl  = useAppStore((s) => s.apiUrl)
-  const { getAllModelsStatus } = useApi()
 
-  const ioRowRef = useRef<HTMLDivElement>(null)
-  const [handleTop, setHandleTop] = useState('50%')
-  useLayoutEffect(() => {
-    if (ioRowRef.current) {
-      const center = ioRowRef.current.offsetTop + ioRowRef.current.offsetHeight / 2
-      setHandleTop(`${center}px`)
-    }
-  }, [])
+  // Refs for handle alignment — support up to 2 inputs (mirrors ExtensionNode)
+  const ioRowRef  = useRef<HTMLDivElement>(null)
+  const ioRow2Ref = useRef<HTMLDivElement>(null)
+  const [handleTop,  setHandleTop]  = useState('50%')
+  const [handle2Top, setHandle2Top] = useState('50%')
 
   const modelId     = (data.params.modelId as string | undefined) ?? ''
   const modelParams = (data.params.modelParams as Record<string, unknown>) ?? {}
@@ -97,23 +92,37 @@ export default function ServerNode({ id, data, selected }: { id: string; data: W
   }, [id, data.params, updateNodeData])
 
   // ── Model list ──────────────────────────────────────────────────────────────
-  const [models, setModels] = useState<ServerModel[]>([])
+  // Shared store: the model list (with per-model input/output schema) is fetched
+  // once and reused by connection validation + preflight, not just this node.
+  const models      = useServerModelsStore((s) => s.models)
+  const loadModels  = useServerModelsStore((s) => s.load)
   const [modelsLoaded, setModelsLoaded] = useState(false)
   useEffect(() => {
     if (!apiUrl) return
-    let cancelled = false
     setModelsLoaded(false)
-    getAllModelsStatus()
-      .then((list) => { if (!cancelled) { setModels(list); setModelsLoaded(true) } })
-      .catch(() => { if (!cancelled) setModelsLoaded(true) })
-    return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiUrl])
+    loadModels().finally(() => setModelsLoaded(true))
+  }, [apiUrl, loadModels])
 
   useEffect(() => {
     if (!modelId && models.length > 0) patchParams({ modelId: models[0].id })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [models])
+
+  const selectedModel = models.find((m) => m.id === modelId)
+  const inputs        = selectedModel?.inputs   // defined → multi-input mode
+  const isMulti        = !!inputs && inputs.length > 1
+  const outputType     = selectedModel?.output ?? 'mesh'
+
+  useLayoutEffect(() => {
+    if (ioRowRef.current) {
+      const center = ioRowRef.current.offsetTop + ioRowRef.current.offsetHeight / 2
+      setHandleTop(`${center}px`)
+    }
+    if (ioRow2Ref.current) {
+      const center = ioRow2Ref.current.offsetTop + ioRow2Ref.current.offsetHeight / 2
+      setHandle2Top(`${center}px`)
+    }
+  }, [isMulti])
 
   // ── Per-model param schema ───────────────────────────────────────────────────
   const [schema, setSchema] = useState<ParamSchema[]>([])
@@ -126,8 +135,6 @@ export default function ServerNode({ id, data, selected }: { id: string; data: W
       .catch(() => { if (!cancelled) setSchema([]) })
     return () => { cancelled = true }
   }, [apiUrl, modelId])
-
-  const selectedModel = models.find((m) => m.id === modelId)
 
   return (
     <BaseNode
@@ -148,13 +155,39 @@ export default function ServerNode({ id, data, selected }: { id: string; data: W
         </svg>
       }
       subheader={
-        <div ref={ioRowRef} className="flex items-center justify-between px-3 py-2">
-          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium border ${TAG_CLS.image}`}>image</span>
-          <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-zinc-600 shrink-0">
-            <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
-          </svg>
-          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium border ${TAG_CLS.mesh}`}>mesh</span>
-        </div>
+        isMulti ? (
+          // Multi-input layout: one row per input, output on first row (mirrors ExtensionNode)
+          <div className="flex flex-col divide-y divide-zinc-800/40">
+            <div ref={ioRowRef} className="flex items-center justify-between px-3 py-2">
+              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium border ${TAG_CLS[inputs[0]] ?? 'border-zinc-700 bg-zinc-800 text-zinc-400'}`}>
+                {inputs[0]}
+              </span>
+              <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-zinc-600 shrink-0">
+                <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+              </svg>
+              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium border ${TAG_CLS[outputType] ?? 'border-zinc-700 bg-zinc-800 text-zinc-400'}`}>
+                {outputType}
+              </span>
+            </div>
+            <div ref={ioRow2Ref} className="flex items-center px-3 py-2">
+              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium border ${TAG_CLS[inputs[1]] ?? 'border-zinc-700 bg-zinc-800 text-zinc-400'}`}>
+                {inputs[1]}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div ref={ioRowRef} className="flex items-center justify-between px-3 py-2">
+            <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium border ${TAG_CLS[selectedModel?.input ?? 'image'] ?? 'border-zinc-700 bg-zinc-800 text-zinc-400'}`}>
+              {selectedModel?.input ?? 'image'}
+            </span>
+            <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-zinc-600 shrink-0">
+              <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+            </svg>
+            <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium border ${TAG_CLS[outputType] ?? 'border-zinc-700 bg-zinc-800 text-zinc-400'}`}>
+              {outputType}
+            </span>
+          </div>
+        )
       }
       handles={
         <>
@@ -162,13 +195,21 @@ export default function ServerNode({ id, data, selected }: { id: string; data: W
             id="input-0"
             type="target"
             position={Position.Left}
-            style={{ background: HANDLE_COLOR.image, width: 14, height: 14, border: '2.5px solid #18181b', top: handleTop }}
+            style={{ background: HANDLE_COLOR[isMulti ? inputs[0] : (selectedModel?.input ?? 'image')], width: 14, height: 14, border: '2.5px solid #18181b', top: handleTop }}
           />
+          {isMulti && (
+            <Handle
+              id="input-1"
+              type="target"
+              position={Position.Left}
+              style={{ background: HANDLE_COLOR[inputs[1]], width: 14, height: 14, border: '2.5px solid #18181b', top: handle2Top }}
+            />
+          )}
           <Handle
             id="output"
             type="source"
             position={Position.Right}
-            style={{ background: HANDLE_COLOR.mesh, width: 14, height: 14, border: '2.5px solid #18181b', top: handleTop }}
+            style={{ background: HANDLE_COLOR[outputType], width: 14, height: 14, border: '2.5px solid #18181b', top: handleTop }}
           />
         </>
       }

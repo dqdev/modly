@@ -109,6 +109,7 @@ def _discover_extensions() -> Dict[str, Tuple[type, dict]]:
                         "hf_include_prefixes": node.get("hf_include_prefixes", []),
                         "params_schema":    node.get("params_schema", manifest.get("params_schema", [])),
                         "input":            node.get("input", "image"),
+                        "inputs":           node.get("inputs"),
                         "output":           node.get("output", "mesh"),
                     }
                     full_id = f"{ext_id}/{node['id']}"
@@ -292,6 +293,9 @@ class GeneratorRegistry:
                 "downloaded":  gen.is_downloaded(),
                 "loaded":      gen.is_loaded(),
                 "active":      model_id == self._active_id,
+                "input":       manifest.get("input", "image"),
+                "inputs":      manifest.get("inputs"),
+                "output":      manifest.get("output", "mesh"),
             })
         return result
 

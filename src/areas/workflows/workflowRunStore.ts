@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import axios, { AxiosInstance } from 'axios'
 import { useAppStore } from '@shared/stores/appStore'
+import { getServerModelInfo } from '@shared/stores/serverModelsStore'
 import { getWorkflowExtension } from './mockExtensions'
 import type { WorkflowExtension } from './mockExtensions'
 import type { Workflow, WFNode, WFEdge } from '@shared/types/electron.d'
@@ -351,10 +352,17 @@ async function executeServerNode(
     return realId ? nodeOutputs.get(realId) : undefined
   }
 
-  let nodeInputPath: string | undefined
+  // A server-registry model may declare multiple inputs (e.g. Trellis 2's
+  // Texture Mesh node: image + mesh) — resolve each incoming edge by the
+  // upstream node's output type rather than assuming a single image input.
+  let nodeInputPath:     string | undefined
+  let nodeInputMeshPath: string | undefined
   for (const edge of workflow.edges.filter((e) => e.target === node.id)) {
     const src = resolveSource(edge.source)
-    if (src?.filePath !== undefined) nodeInputPath = src.filePath
+    if (!src) continue
+    if (src.outputType === 'mesh')       nodeInputMeshPath = src.filePath
+    else if (src.outputType === 'image') nodeInputPath     = src.filePath
+    else if (src.filePath !== undefined) nodeInputPath     = src.filePath
   }
 
   const modelId = (node.data.params?.modelId as string | undefined) ?? ''
@@ -373,12 +381,21 @@ async function executeServerNode(
 
   const modelParams = (node.data.params?.modelParams as Record<string, unknown>) ?? {}
 
+  const extraParams: Record<string, unknown> = {}
+  if (nodeInputMeshPath) {
+    const norm = nodeInputMeshPath.replace(/\\/g, '/')
+    extraParams.mesh_path = norm.startsWith(workspaceDir)
+      ? norm.slice(workspaceDir.length).replace(/^\//, '')
+      : norm
+  }
+
   nodeInputPath = await runModelJob(
-    client, modelId, blob, fname, modelParams, workspaceDir, setRunState, 'Submitting to server…',
+    client, modelId, blob, fname, { ...modelParams, ...extraParams }, workspaceDir, setRunState, 'Submitting to server…',
   )
 
-  const serverUrl = await resolveServerUrl(nodeInputPath, ctx, true)
-  nodeOutputs.set(node.id, { filePath: nodeInputPath, outputType: 'mesh', serverUrl })
+  const outputType = getServerModelInfo(modelId)?.output ?? 'mesh'
+  const serverUrl  = await resolveServerUrl(nodeInputPath, ctx, true)
+  nodeOutputs.set(node.id, { filePath: nodeInputPath, outputType, serverUrl })
 
   if (serverUrl && reachesSceneOutput(node.id, workflow.edges, nodeMap)) {
     ctx.lastSceneMesh = serverUrl
