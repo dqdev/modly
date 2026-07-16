@@ -145,6 +145,7 @@ declare global {
         selectMeshFile:  () => Promise<string | null>
         saveModel:       (defaultName: string) => Promise<string | null>
         readFileBase64:  (filePath: string) => Promise<string>
+        exists:          (filePath: string) => Promise<boolean>
         downloadWorkspaceFile: (workspaceUrl: string) => Promise<{ success: boolean; localPath?: string; error?: string }>
         selectDirectory: (defaultPath?: string) => Promise<string | null>
         savePath:        (args: { filters: { name: string; extensions: string[] }[]; defaultPath?: string }) => Promise<string | null>

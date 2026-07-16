@@ -406,6 +406,10 @@ export function setupIpcHandlers(pythonBridge: PythonBridge, getWindow: WindowGe
     return buffer.toString('base64')
   })
 
+  ipcMain.handle('fs:exists', (_, filePath: string): boolean => {
+    return typeof filePath === 'string' && filePath.trim().length > 0 && existsSync(filePath)
+  })
+
   // Fetch a generated file from the API (which may run on a remote machine, see
   // PYTHON_API_URL / API_BASE_URL) and cache it on the local disk so it can be fed
   // into local process-extension subprocesses / read via fs:readFileBase64.

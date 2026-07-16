@@ -64,6 +64,8 @@ export function createElectronApi(ipcRenderer: IpcRendererLike, webFrame: WebFra
         ipcRenderer.invoke('fs:saveModel', defaultName) as Promise<string | null>,
       readFileBase64:    (filePath: string): Promise<string> =>
         ipcRenderer.invoke('fs:readFileBase64', filePath) as Promise<string>,
+      exists:            (filePath: string): Promise<boolean> =>
+        ipcRenderer.invoke('fs:exists', filePath) as Promise<boolean>,
       downloadWorkspaceFile: (workspaceUrl: string): Promise<{ success: boolean; localPath?: string; error?: string }> =>
         ipcRenderer.invoke('fs:downloadWorkspaceFile', workspaceUrl) as Promise<{ success: boolean; localPath?: string; error?: string }>,
       selectDirectory:   (defaultPath?: string): Promise<string | null> =>

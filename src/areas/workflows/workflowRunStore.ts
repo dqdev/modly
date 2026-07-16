@@ -30,7 +30,7 @@ const IDLE: WorkflowRunState = {
 const _cancel      = { current: false }
 const _activeJobId = { current: null as string | null }
 
-interface NodeOutput { filePath?: string; text?: string; outputType?: string }
+interface NodeOutput { filePath?: string; text?: string; outputType?: string; serverUrl?: string }
 
 interface RunContext {
   workflow:           Workflow
@@ -130,19 +130,48 @@ function identifyBranches(workflow: Workflow): {
   return { preExecExtNodes, branches, waitIds, parentWait, ordered }
 }
 
-// Node outputs carry the API server's workspace-relative path re-based onto our
-// local workspaceDir (see runModelJob's return value below). That path is only
-// real on disk when the API happens to run on this machine — with a remote API
-// (see PYTHON_API_URL) the file only exists on the server's disk. Local consumers
-// (process-extension subprocesses, fs:readFileBase64) need real bytes, so fetch
-// the file over HTTP into a local temp path before handing it to them.
+// Some node outputs carry the API server's workspace-relative path re-based onto
+// our local workspaceDir (see runModelJob's return value below) — real on disk
+// only when the API happens to run on this machine; with a remote API (see
+// PYTHON_API_URL) the file exists only on the server's disk. Others (a process-
+// extension's own result) are already genuinely local. Both look identical as
+// strings, so check the disk rather than guess: if it's not there, treat it as
+// the former and fetch it over HTTP before handing it to a local consumer
+// (process-extension subprocess, fs:readFileBase64).
 async function ensureLocalFile(path: string, workspaceDir: string): Promise<string> {
+  if (await window.electron.fs.exists(path)) return path
   const norm = path.replace(/\\/g, '/')
-  if (!norm.startsWith(workspaceDir)) return path
+  if (!norm.startsWith(workspaceDir)) throw new Error(`File not found: ${path}`)
   const rel = norm.slice(workspaceDir.length).replace(/^\//, '')
   const dl = await window.electron.fs.downloadWorkspaceFile(`/workspace/${rel}`)
   if (!dl.success || !dl.localPath) throw new Error(dl.error ?? `Failed to fetch generated file: ${rel}`)
   return dl.localPath
+}
+
+// The inverse: a node output that IS real on local disk (a process-extension
+// result) but that the API server — which may be remote — has never seen, so a
+// naive `/workspace/<rel>` URL 404s when the viewer or a downstream export tries
+// to fetch it. `isServerNative` is true for outputs that came from the API
+// itself (model generation), which are always already reachable at that URL.
+async function resolveServerUrl(
+  filePath:       string,
+  ctx:            RunContext,
+  isServerNative: boolean,
+): Promise<string | undefined> {
+  const norm = filePath.replace(/\\/g, '/')
+  if (!norm.startsWith(ctx.workspaceDir)) return undefined
+  const rel = norm.slice(ctx.workspaceDir.length).replace(/^\//, '')
+  if (isServerNative) return `/workspace/${rel}`
+
+  const base64 = await window.electron.fs.readFileBase64(filePath)
+  const bytes  = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+  const ext    = filePath.split('.').pop() ?? 'glb'
+  const fd     = new FormData()
+  fd.append('file', new Blob([bytes]), `mesh.${ext}`)
+  const { data } = await ctx.client.post<{ url: string }>(
+    '/optimize/import-upload', fd, { headers: { 'Content-Type': 'multipart/form-data' } },
+  )
+  return data.url
 }
 
 // ─── Model generation job (shared by ExtensionNode's model branch and ServerNode) ──
@@ -296,13 +325,12 @@ async function executeExtensionNode(
   }
 
   const outputType = ext?.output ?? (nodeInputPath ? 'mesh' : undefined)
-  nodeOutputs.set(node.id, { filePath: nodeInputPath, text: nodeInputText, outputType })
+  const serverUrl  = nodeInputPath ? await resolveServerUrl(nodeInputPath, ctx, isModelNode) : undefined
+  nodeOutputs.set(node.id, { filePath: nodeInputPath, text: nodeInputText, outputType, serverUrl })
 
-  const norm = nodeInputPath?.replace(/\\/g, '/')
-  if (norm?.startsWith(workspaceDir) && reachesSceneOutput(node.id, workflow.edges, nodeMap)) {
-    const url = `/workspace/${norm.slice(workspaceDir.length).replace(/^\//, '')}`
-    ctx.lastSceneMesh = url   // remember it so finalize() keeps the last-run branch in view
-    useAppStore.getState().updateCurrentJob({ status: 'done', progress: 100, outputUrl: url })
+  if (serverUrl && reachesSceneOutput(node.id, workflow.edges, nodeMap)) {
+    ctx.lastSceneMesh = serverUrl   // remember it so finalize() keeps the last-run branch in view
+    useAppStore.getState().updateCurrentJob({ status: 'done', progress: 100, outputUrl: serverUrl })
   }
 }
 
@@ -349,13 +377,12 @@ async function executeServerNode(
     client, modelId, blob, fname, modelParams, workspaceDir, setRunState, 'Submitting to server…',
   )
 
-  nodeOutputs.set(node.id, { filePath: nodeInputPath, outputType: 'mesh' })
+  const serverUrl = await resolveServerUrl(nodeInputPath, ctx, true)
+  nodeOutputs.set(node.id, { filePath: nodeInputPath, outputType: 'mesh', serverUrl })
 
-  const norm = nodeInputPath.replace(/\\/g, '/')
-  if (norm.startsWith(workspaceDir) && reachesSceneOutput(node.id, workflow.edges, nodeMap)) {
-    const url = `/workspace/${norm.slice(workspaceDir.length).replace(/^\//, '')}`
-    ctx.lastSceneMesh = url
-    useAppStore.getState().updateCurrentJob({ status: 'done', progress: 100, outputUrl: url })
+  if (serverUrl && reachesSceneOutput(node.id, workflow.edges, nodeMap)) {
+    ctx.lastSceneMesh = serverUrl
+    useAppStore.getState().updateCurrentJob({ status: 'done', progress: 100, outputUrl: serverUrl })
   }
 }
 
@@ -400,9 +427,8 @@ function pushBranchSceneMesh(ctx: RunContext, waitId: string): void {
     const inEdge = ctx.workflow.edges.find((e) => e.target === node.id)
     if (!inEdge) continue
     const srcId = resolveDataSource(inEdge.source, ctx.workflow.edges, ctx.nodeMap)
-    const fp = srcId ? ctx.nodeOutputs.get(srcId)?.filePath?.replace(/\\/g, '/') : undefined
-    if (fp && fp.startsWith(ctx.workspaceDir)) {
-      const url = `/workspace/${fp.slice(ctx.workspaceDir.length).replace(/^\//, '')}`
+    const url = srcId ? ctx.nodeOutputs.get(srcId)?.serverUrl : undefined
+    if (url) {
       ctx.lastSceneMesh = url
       useAppStore.getState().updateCurrentJob({ status: 'done', progress: 100, outputUrl: url })
     }
@@ -453,24 +479,13 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => {
     if (lastOutputNode) {
       for (const edge of ctx.workflow.edges.filter((e) => e.target === lastOutputNode.id)) {
         const src = ctx.nodeOutputs.get(edge.source)
-        if (src?.filePath) {
-          const norm = src.filePath.replace(/\\/g, '/')
-          if (norm.startsWith(ctx.workspaceDir)) {
-            outputUrl = `/workspace/${norm.slice(ctx.workspaceDir.length).replace(/^\//, '')}`
-          }
-        }
+        if (src?.serverUrl) outputUrl = src.serverUrl
       }
     }
     if (!outputUrl) {
       for (const [, o] of ctx.nodeOutputs) {
-        if (o.filePath) {
-          const norm = o.filePath.replace(/\\/g, '/')
-          if (norm.startsWith(ctx.workspaceDir)) {
-            outputUrl = `/workspace/${norm.slice(ctx.workspaceDir.length).replace(/^\//, '')}`
-          } else {
-            outputPath = o.filePath
-          }
-        }
+        if (o.serverUrl) outputUrl = o.serverUrl
+        else if (o.filePath) outputPath = o.filePath
       }
     }
 
