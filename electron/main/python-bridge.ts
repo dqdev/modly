@@ -9,7 +9,14 @@ import { cleanPythonEnv, getVenvPythonExe } from './python-setup'
 
 const API_PORT = 8765
 const API_HOST = '127.0.0.1'
-export const API_BASE_URL = `http://${API_HOST}:${API_PORT}`
+
+// When set, Modly talks to an already-running FastAPI backend at this URL
+// instead of spawning its own local Python process — e.g. a headless
+// server on the LAN running the models on real GPUs, with the Electron
+// app itself running on a laptop that just needs to render the UI.
+const REMOTE_API_URL = process.env['PYTHON_API_URL']?.trim() || null
+export const IS_REMOTE_API = REMOTE_API_URL !== null
+export const API_BASE_URL = REMOTE_API_URL ?? `http://${API_HOST}:${API_PORT}`
 
 export class PythonBridge {
   private process: ChildProcess | null = null
@@ -34,6 +41,12 @@ export class PythonBridge {
   }
 
   private async _start(): Promise<void> {
+    if (IS_REMOTE_API) {
+      console.log('[PythonBridge] Using remote API at', API_BASE_URL)
+      await this.waitUntilReady()
+      return
+    }
+
     if (this.process) {
       await this.waitUntilReady()
       return
@@ -102,6 +115,7 @@ export class PythonBridge {
   }
 
   async stop(): Promise<void> {
+    if (IS_REMOTE_API) { this.ready = false; return }
     if (!this.process) return
     const proc = this.process
     this.process = null
@@ -125,6 +139,12 @@ export class PythonBridge {
   }
 
   async restart(): Promise<void> {
+    if (IS_REMOTE_API) {
+      console.log('[PythonBridge] Remote API — restart is a no-op, re-checking readiness')
+      this.ready = false
+      await this.start()
+      return
+    }
     console.log('[PythonBridge] Restarting to free memory…')
     this.intentionalStop = true
     await this.stop()
@@ -177,7 +197,7 @@ export class PythonBridge {
 
   private async waitUntilReady(maxRetries = 180, delayMs = 500): Promise<void> {
     for (let i = 0; i < maxRetries; i++) {
-      if (!this.process) throw new Error('FastAPI process exited unexpectedly during startup')
+      if (!IS_REMOTE_API && !this.process) throw new Error('FastAPI process exited unexpectedly during startup')
       try {
         await axios.get(`${API_BASE_URL}/health`, { timeout: 2000 })
         this.ready = true
@@ -187,7 +207,9 @@ export class PythonBridge {
         await new Promise((r) => setTimeout(r, delayMs))
       }
     }
-    throw new Error('FastAPI did not start in time')
+    throw new Error(IS_REMOTE_API
+      ? `Could not reach remote API at ${API_BASE_URL}. Check the server is running and reachable on the network.`
+      : 'FastAPI did not start in time')
   }
 
   private resolvePythonExecutable(): string {

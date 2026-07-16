@@ -394,12 +394,7 @@ def _convert_gaussian_ply_to_splat(ply_path: Path, out_path: str) -> None:
         f.write(out.tobytes())
 
 
-@router.post("/import-by-path")
-async def import_mesh_by_path(body: ImportByPathRequest):
-    file_path = Path(body.path)
-    if not file_path.is_file():
-        raise HTTPException(400, "File not found")
-
+def _import_mesh_file(file_path: Path) -> dict:
     ext = file_path.suffix.lstrip(".").lower()
     if ext not in ("glb", "obj", "stl", "ply", "splat"):
         raise HTTPException(400, f"Unsupported format: {ext}")
@@ -428,6 +423,31 @@ async def import_mesh_by_path(body: ImportByPathRequest):
     loaded = trimesh.load(str(file_path))
     loaded.export(output_path)
     return {"url": f"/optimize/serve-file?path={quote(output_path)}"}
+
+
+@router.post("/import-by-path")
+async def import_mesh_by_path(body: ImportByPathRequest):
+    file_path = Path(body.path)
+    if not file_path.is_file():
+        raise HTTPException(400, "File not found")
+    return _import_mesh_file(file_path)
+
+
+@router.post("/import-upload")
+async def import_mesh_upload(file: UploadFile = File(...)):
+    # Uploaded rather than referenced by path — needed when the Electron
+    # client and this API run on different machines (client-local file
+    # paths mean nothing on the server's filesystem).
+    ext = Path(file.filename or "").suffix.lstrip(".").lower()
+    if ext not in ("glb", "obj", "stl", "ply", "splat"):
+        raise HTTPException(400, f"Unsupported format: {ext}")
+
+    tmp_dir = tempfile.mkdtemp(prefix="modly_import_")
+    file_path = Path(tmp_dir) / f"upload.{ext}"
+    with open(file_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    return _import_mesh_file(file_path)
 
 
 _SERVE_MEDIA_TYPES = {

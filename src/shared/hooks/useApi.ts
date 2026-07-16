@@ -112,7 +112,18 @@ export function useApi() {
   }
 
   async function importMesh(filePath: string): Promise<{ url: string }> {
-    const { data } = await client.post<{ url: string }>('/optimize/import-by-path', { path: filePath })
+    // Uploaded rather than sent as a path — the API may be running on a
+    // different machine than the one the file was picked on.
+    const base64 = await window.electron.fs.readFileBase64(filePath)
+    const byteArray = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+    const blob = new Blob([byteArray], { type: 'application/octet-stream' })
+    const filename = filePath.split(/[\\/]/).pop() ?? 'mesh'
+
+    const formData = new FormData()
+    formData.append('file', blob, filename)
+    const { data } = await client.post<{ url: string }>('/optimize/import-upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
     return { url: data.url }
   }
 

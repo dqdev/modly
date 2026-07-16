@@ -6,6 +6,7 @@ import { existsSync, readdirSync, statSync, readFileSync } from 'fs'
 import { join } from 'path'
 import { getSettings } from './settings-store'
 import { app } from 'electron'
+import { API_BASE_URL as PYTHON_API_URL } from './python-bridge'
 
 export interface DownloadProgress {
   percent: number
@@ -18,8 +19,6 @@ export interface DownloadProgress {
   stalledSeconds?: number
 }
 export type ProgressCallback = (progress: DownloadProgress) => void
-
-const PYTHON_API_URL = process.env['PYTHON_API_URL'] ?? 'http://127.0.0.1:8765'
 
 // ------------------------------------------------------------------
 // Public API

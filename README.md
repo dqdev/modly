@@ -67,6 +67,30 @@ npm test
 npm run build
 ```
 
+## Running the AI backend on a separate machine
+
+The GPU-heavy work (model inference) lives in a standalone FastAPI server (`api/`); the Electron app is just a client that talks to it over HTTP. Normally Electron spawns and manages that server itself on `127.0.0.1`, but you can instead point it at a server running on another machine — e.g. a headless Ubuntu box with the GPUs, while the Electron GUI runs on your laptop.
+
+**On the GPU server** (Ubuntu), set up the Python backend per [`api/README.md`](api/README.md), then run it standalone, bound to the network instead of localhost:
+
+```bash
+./api/run_server.sh
+```
+
+By default it binds `0.0.0.0:8765`. Override with `MODLY_API_HOST` / `MODLY_API_PORT`, and `MODELS_DIR` / `WORKSPACE_DIR` / `EXTENSIONS_DIR` to control where models and generated files are stored on the server. Run it under `systemd`, `tmux`, or `screen` so it survives logout.
+
+**On the client machine** (e.g. your Mac), point the Electron app at the remote server instead of spawning a local one:
+
+```bash
+PYTHON_API_URL=http://<server-ip>:8765 npm run dev
+```
+
+When `PYTHON_API_URL` is set, Electron skips starting its own Python process entirely and uses that URL for every backend call.
+
+> **No authentication.** The API server has no login/API key and accepts requests from any origin — that's how Electron talks to its own local backend today, and this mode just exposes the same server on the network as-is. Only run this on a trusted network (LAN or VPN, e.g. Tailscale) — never expose port 8765 to the open internet.
+
+**Known limitation:** the Workflow graph editor's "Load 3D Mesh" node and the "current mesh" workflow input read files by local filesystem path, which assumes the client and the API share a filesystem. That assumption still holds when both run on the same machine, but breaks across a client/server split. The main Generate page (image → 3D generation, optimize/smooth/decimate/export, and importing an external mesh file) all upload file contents over HTTP instead and work fine remotely.
+
 ## Platform notes
 
 - macOS support targets Apple Silicon only.
