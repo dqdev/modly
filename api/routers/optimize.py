@@ -21,7 +21,7 @@ from pathlib import Path
 from urllib.parse import quote
 from pydantic import BaseModel
 
-from services.generator_registry import WORKSPACE_DIR
+import services.generator_registry as reg
 
 router = APIRouter(tags=["optimize"])
 
@@ -54,8 +54,8 @@ def _resolve_input_path(raw_path: str) -> Path:
             raise HTTPException(404, f"File not found: {raw_path}")
         return resolved
 
-    resolved = (WORKSPACE_DIR / raw_path).resolve()
-    if not str(resolved).startswith(str(WORKSPACE_DIR.resolve())):
+    resolved = (reg.WORKSPACE_DIR / raw_path).resolve()
+    if not str(resolved).startswith(str(reg.WORKSPACE_DIR.resolve())):
         raise HTTPException(400, "Invalid path")
     if not resolved.exists():
         raise HTTPException(404, f"File not found: {raw_path}")
@@ -77,13 +77,13 @@ def optimize_mesh(body: OptimizeRequest):
 
     stem = input_path.stem
     output_name = f"{stem}_opt{target_faces}.glb"
-    output_dir = input_path.parent if str(input_path).startswith(str(WORKSPACE_DIR.resolve())) else WORKSPACE_DIR / "Workflows"
+    output_dir = input_path.parent if str(input_path).startswith(str(reg.WORKSPACE_DIR.resolve())) else reg.WORKSPACE_DIR / "Workflows"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / output_name
     result.export(str(output_path))
 
     face_count = len(result.faces)
-    rel = output_path.relative_to(WORKSPACE_DIR).as_posix()
+    rel = output_path.relative_to(reg.WORKSPACE_DIR).as_posix()
     return {"url": f"/workspace/{rel}", "face_count": face_count}
 
 
@@ -191,12 +191,12 @@ def smooth_mesh(body: SmoothRequest):
 
     stem = input_path.stem
     output_name = f"{stem}_smooth{iterations}.glb"
-    output_dir = input_path.parent if str(input_path).startswith(str(WORKSPACE_DIR.resolve())) else WORKSPACE_DIR / "Workflows"
+    output_dir = input_path.parent if str(input_path).startswith(str(reg.WORKSPACE_DIR.resolve())) else reg.WORKSPACE_DIR / "Workflows"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / output_name
     result.export(str(output_path))
 
-    rel = output_path.relative_to(WORKSPACE_DIR).as_posix()
+    rel = output_path.relative_to(reg.WORKSPACE_DIR).as_posix()
     return {"url": f"/workspace/{rel}"}
 
 
@@ -219,12 +219,12 @@ def transform_mesh(body: TransformRequest):
 
     stem = input_path.stem
     output_name = f"{stem}_xf_{uuid.uuid4().hex[:8]}.glb"
-    output_dir = input_path.parent if str(input_path).startswith(str(WORKSPACE_DIR.resolve())) else WORKSPACE_DIR / "Workflows"
+    output_dir = input_path.parent if str(input_path).startswith(str(reg.WORKSPACE_DIR.resolve())) else reg.WORKSPACE_DIR / "Workflows"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / output_name
     loaded.export(str(output_path))
 
-    rel = output_path.relative_to(WORKSPACE_DIR).as_posix()
+    rel = output_path.relative_to(reg.WORKSPACE_DIR).as_posix()
     return {"url": f"/workspace/{rel}"}
 
 
@@ -474,7 +474,6 @@ def ply_to_splat(path: str):
     `path` is workspace-relative (e.g. "Workflows/foo.ply"). A .splat is served
     as-is; a GS .ply is normalised + converted (cached by mtime + conv version).
     """
-    import services.generator_registry as reg  # dynamic: workspace dir may change at runtime
     workspace = reg.WORKSPACE_DIR.resolve()
     src = (workspace / path).resolve()
     if not str(src).startswith(str(workspace)):
@@ -502,8 +501,8 @@ def export_mesh(path: str, format: str):
     if format not in ("obj", "stl", "ply"):
         raise HTTPException(400, "Supported formats: obj, stl, ply")
 
-    input_path = (WORKSPACE_DIR / path).resolve()
-    if not str(input_path).startswith(str(WORKSPACE_DIR.resolve())):
+    input_path = (reg.WORKSPACE_DIR / path).resolve()
+    if not str(input_path).startswith(str(reg.WORKSPACE_DIR.resolve())):
         raise HTTPException(400, "Invalid path")
     if not input_path.exists():
         raise HTTPException(404, f"File not found: {path}")

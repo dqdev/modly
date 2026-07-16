@@ -10,7 +10,8 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from services.generator_registry import generator_registry, MODELS_DIR
+import services.generator_registry as reg
+from services.generator_registry import generator_registry
 
 router = APIRouter(tags=["model"])
 
@@ -144,7 +145,7 @@ async def hf_download(
     """
     import json as _json
     import os
-    dest_dir  = str(MODELS_DIR / model_id)
+    dest_dir  = str(reg.MODELS_DIR / model_id)
     # Prefer skip_prefixes passed directly from the client (authoritative, no registry dep)
     if skip_prefixes:
         try:

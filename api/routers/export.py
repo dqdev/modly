@@ -4,7 +4,7 @@ import trimesh
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response, FileResponse
 
-from services.generator_registry import WORKSPACE_DIR
+import services.generator_registry as reg
 
 router = APIRouter(tags=["export"])
 
@@ -16,8 +16,8 @@ def export_mesh(fmt: str, path: str):
     if fmt not in SUPPORTED:
         raise HTTPException(400, f"Unsupported format: {fmt}. Supported: {', '.join(SUPPORTED)}")
 
-    full_path = (WORKSPACE_DIR / path).resolve()
-    if not str(full_path).startswith(str(WORKSPACE_DIR.resolve())):
+    full_path = (reg.WORKSPACE_DIR / path).resolve()
+    if not str(full_path).startswith(str(reg.WORKSPACE_DIR.resolve())):
         raise HTTPException(400, "Invalid path")
     if not full_path.exists():
         raise HTTPException(404, f"File not found: {path}")

@@ -9,7 +9,8 @@ from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Background
 from services.generators.base import smooth_progress, GenerationCancelled
 
 import re as _re
-from services.generator_registry import generator_registry, WORKSPACE_DIR
+import services.generator_registry as reg
+from services.generator_registry import generator_registry
 from schemas.generation import JobStatus
 
 router = APIRouter(tags=["generation"])
@@ -161,7 +162,7 @@ async def _run_generation(job_id: str, image_bytes: bytes, params: dict, collect
             return
 
         # Direct output to the collection subfolder
-        coll_dir = WORKSPACE_DIR / collection
+        coll_dir = reg.WORKSPACE_DIR / collection
         coll_dir.mkdir(parents=True, exist_ok=True)
         gen.outputs_dir = coll_dir
 
@@ -182,7 +183,7 @@ async def _run_generation(job_id: str, image_bytes: bytes, params: dict, collect
         job.progress = 100
         _completed_at[job_id] = time.monotonic()
         try:
-            rel = output_path.relative_to(WORKSPACE_DIR)
+            rel = output_path.relative_to(reg.WORKSPACE_DIR)
             job.output_url = f"/workspace/{rel.as_posix()}"
         except ValueError:
             job.output_url = f"/workspace/{collection}/{output_path.name}"

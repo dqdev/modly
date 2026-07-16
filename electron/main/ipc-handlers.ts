@@ -406,6 +406,29 @@ export function setupIpcHandlers(pythonBridge: PythonBridge, getWindow: WindowGe
     return buffer.toString('base64')
   })
 
+  // Fetch a generated file from the API (which may run on a remote machine, see
+  // PYTHON_API_URL / API_BASE_URL) and cache it on the local disk so it can be fed
+  // into local process-extension subprocesses / read via fs:readFileBase64.
+  // Workspace-relative jobs' output_url is always same-origin ("/workspace/...") on
+  // the API server; this must never be used to reach an arbitrary external host.
+  ipcMain.handle('fs:downloadWorkspaceFile', async (_, workspaceUrl: string) => {
+    if (typeof workspaceUrl !== 'string' || !workspaceUrl.startsWith('/workspace/')) {
+      return { success: false, error: 'fs:downloadWorkspaceFile requires a "/workspace/..." path' }
+    }
+    try {
+      const { workspaceDir } = getSettings(app.getPath('userData'))
+      const response = await axios.get(`${API_BASE_URL}${workspaceUrl}`, { responseType: 'arraybuffer' })
+      const tmpDir = join(workspaceDir, 'tmp')
+      await mkdir(tmpDir, { recursive: true })
+      const basename = workspaceUrl.split('/').pop() || `download-${Date.now()}`
+      const localPath = join(tmpDir, `${Date.now()}_${basename}`)
+      await writeFile(localPath, Buffer.from(response.data as ArrayBuffer))
+      return { success: true, localPath }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
   ipcMain.handle('fs:readScreenshotDataUrl', async (_, filename: string) => {
     const filePath = app.isPackaged
       ? join(process.resourcesPath, 'screenshots', filename)

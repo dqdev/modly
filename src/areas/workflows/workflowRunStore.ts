@@ -130,6 +130,21 @@ function identifyBranches(workflow: Workflow): {
   return { preExecExtNodes, branches, waitIds, parentWait, ordered }
 }
 
+// Node outputs carry the API server's workspace-relative path re-based onto our
+// local workspaceDir (see runModelJob's return value below). That path is only
+// real on disk when the API happens to run on this machine — with a remote API
+// (see PYTHON_API_URL) the file only exists on the server's disk. Local consumers
+// (process-extension subprocesses, fs:readFileBase64) need real bytes, so fetch
+// the file over HTTP into a local temp path before handing it to them.
+async function ensureLocalFile(path: string, workspaceDir: string): Promise<string> {
+  const norm = path.replace(/\\/g, '/')
+  if (!norm.startsWith(workspaceDir)) return path
+  const rel = norm.slice(workspaceDir.length).replace(/^\//, '')
+  const dl = await window.electron.fs.downloadWorkspaceFile(`/workspace/${rel}`)
+  if (!dl.success || !dl.localPath) throw new Error(dl.error ?? `Failed to fetch generated file: ${rel}`)
+  return dl.localPath
+}
+
 // ─── Model generation job (shared by ExtensionNode's model branch and ServerNode) ──
 // Submits an image to /generate/from-image and polls /generate/status until it
 // finishes, returning the local absolute path of the resulting mesh.
@@ -238,7 +253,7 @@ async function executeExtensionNode(
     }
     const base64 = selectedImageData && nodeInputPath === undefined
       ? selectedImageData
-      : await window.electron.fs.readFileBase64(activeImagePath as string)
+      : await window.electron.fs.readFileBase64(await ensureLocalFile(activeImagePath as string, workspaceDir))
     const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
     const blob  = new Blob([bytes], { type: 'image/png' })
     const fname = activeImagePath?.split(/[\\/]/).pop() ?? 'image.png'
@@ -268,9 +283,10 @@ async function executeExtensionNode(
     const parts  = (node.data.extensionId ?? '').split('/')
     const extId  = parts[0]
     const nid    = parts[1] ?? ''
+    const localInputPath = nodeInputPath ? await ensureLocalFile(nodeInputPath, workspaceDir) : nodeInputPath
     const result = await window.electron.extensions.runProcess(
       extId,
-      { filePath: nodeInputPath, text: nodeInputText, nodeId: nid },
+      { filePath: localInputPath, text: nodeInputText, nodeId: nid },
       node.data.params as Record<string, unknown>,
     )
     if (!result.success) throw new Error(result.error ?? 'Process extension failed')
@@ -322,7 +338,7 @@ async function executeServerNode(
   }
   const base64 = selectedImageData && nodeInputPath === undefined
     ? selectedImageData
-    : await window.electron.fs.readFileBase64(activeImagePath as string)
+    : await window.electron.fs.readFileBase64(await ensureLocalFile(activeImagePath as string, workspaceDir))
   const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
   const blob  = new Blob([bytes], { type: 'image/png' })
   const fname = activeImagePath?.split(/[\\/]/).pop() ?? 'image.png'
