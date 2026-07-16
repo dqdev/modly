@@ -9,6 +9,7 @@ import { useWorkflowsStore }   from '@shared/stores/workflowsStore'
 import { useAppStore }         from '@shared/stores/appStore'
 import { useExtensionsStore }  from '@shared/stores/extensionsStore'
 import { useNavStore }         from '@shared/stores/navStore'
+import { useApi }              from '@shared/hooks/useApi'
 import { useWorkflowRunStore } from '@areas/workflows/workflowRunStore'
 import { useWaitButton } from '@areas/workflows/useWaitButton'
 import { buildAllWorkflowExtensions, getWorkflowExtension } from '@areas/workflows/mockExtensions'
@@ -440,6 +441,106 @@ function ExtensionParamRow({ nodeId, ext, nodes, onPatch }: { nodeId: string; ex
   )
 }
 
+function ServerParamRow({ nodeId, nodes, onPatch }: { nodeId: string; nodes: FlowNode[]; onPatch: PatchFn }) {
+  const [expanded, setExpanded] = useState(true)
+  const node    = nodes.find((n) => n.id === nodeId)
+  const data    = node?.data as { enabled: boolean; params: Record<string, unknown> } | undefined
+  const enabled = data?.enabled ?? true
+  const modelId = (data?.params.modelId as string | undefined) ?? ''
+  const modelParams = (data?.params.modelParams as Record<string, unknown>) ?? {}
+
+  const apiUrl = useAppStore((s) => s.apiUrl)
+  const { getAllModelsStatus } = useApi()
+  const [models, setModels] = useState<{ id: string; name: string; downloaded: boolean }[]>([])
+  const [schema, setSchema] = useState<ParamSchema[]>([])
+
+  useEffect(() => {
+    if (!apiUrl) return
+    let cancelled = false
+    getAllModelsStatus().then((list) => { if (!cancelled) setModels(list) }).catch(() => {})
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiUrl])
+
+  useEffect(() => {
+    if (!apiUrl || !modelId) { setSchema([]); return }
+    let cancelled = false
+    fetch(`${apiUrl}/model/params?model_id=${encodeURIComponent(modelId)}`)
+      .then((res) => res.json())
+      .then((params: ParamSchema[]) => { if (!cancelled) setSchema(params) })
+      .catch(() => { if (!cancelled) setSchema([]) })
+    return () => { cancelled = true }
+  }, [apiUrl, modelId])
+
+  const selectedModel = models.find((m) => m.id === modelId)
+
+  return (
+    <div className={`flex flex-col transition-opacity ${enabled ? '' : 'opacity-40'}`}>
+      <div className="flex items-center gap-2">
+        <div className="flex-1 min-w-0">
+          <p className="text-[11px] font-medium text-zinc-200 truncate">Server</p>
+          <div className="flex items-center gap-1 mt-0.5">
+            <span className="text-[9px]" style={{ color: TYPE_COLOR.image }}>image</span>
+            <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-zinc-600">
+              <line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>
+            </svg>
+            <span className="text-[9px]" style={{ color: TYPE_COLOR.mesh }}>mesh</span>
+          </div>
+        </div>
+
+        <button onClick={() => onPatch(nodeId, { enabled: !enabled })}
+          className="relative shrink-0" style={{ width: 26, height: 15 }}>
+          <span className={`absolute inset-0 rounded-full transition-colors ${enabled ? 'bg-accent/70' : 'bg-zinc-700'}`} />
+          <span className={`absolute top-[1.5px] w-3 h-3 rounded-full bg-white shadow transition-all ${enabled ? 'left-[11px]' : 'left-[1.5px]'}`} />
+        </button>
+
+        <button onClick={() => setExpanded((v) => !v)}
+          className="p-0.5 rounded text-zinc-600 hover:text-zinc-400 transition-colors">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+            className={`transition-transform ${expanded ? 'rotate-180' : ''}`}>
+            <polyline points="6 9 12 15 18 9"/>
+          </svg>
+        </button>
+      </div>
+
+      {expanded && (
+        <div className="mt-2 flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <label className="text-[10px] text-zinc-500 w-20 shrink-0 truncate">Model</label>
+            <select
+              value={modelId}
+              onChange={(e) => onPatch(nodeId, { params: { ...(data?.params ?? {}), modelId: e.target.value, modelParams: {} } })}
+              className={`${inputCls} flex-1`}
+            >
+              {models.length === 0 && <option value="">Loading…</option>}
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}{m.downloaded ? '' : ' (downloads on run)'}</option>
+              ))}
+            </select>
+          </div>
+          {selectedModel && !selectedModel.downloaded && (
+            <p className="text-[9px] text-zinc-600 leading-snug">
+              Not downloaded yet — it will be fetched automatically on first run.
+            </p>
+          )}
+          {schema.map((param) => {
+            const val = ((modelParams[param.id] ?? param.default) as number | string)
+            return (
+              <div key={param.id} className="flex items-center gap-2">
+                <label className="text-[10px] text-zinc-500 w-20 shrink-0 truncate">{param.label}</label>
+                <div className="flex-1">
+                  <ParamField param={param} value={val}
+                    onChange={(v) => onPatch(nodeId, { params: { ...(data?.params ?? {}), modelParams: { ...modelParams, [param.id]: v } } })} />
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Embedded canvas ──────────────────────────────────────────────────────────
 
 function EmbeddedCanvas({ workflow, allExtensions }: {
@@ -484,7 +585,7 @@ function EmbeddedCanvas({ workflow, allExtensions }: {
   )
 
   const paramNodes = sortedNodes.filter((n) =>
-    (n.type === 'imageNode' || n.type === 'textNode' || n.type === 'meshNode' || n.type === 'extensionNode' || n.type === 'waitNode')
+    (n.type === 'imageNode' || n.type === 'textNode' || n.type === 'meshNode' || n.type === 'extensionNode' || n.type === 'waitNode' || n.type === 'serverNode')
     && (n.data as { showInGenerate?: boolean }).showInGenerate === true,
   )
 
@@ -514,6 +615,7 @@ function EmbeddedCanvas({ workflow, allExtensions }: {
                 const ext = getWorkflowExtension(node.data.extensionId ?? '', allExtensions)
                 return ext ? <ExtensionParamRow nodeId={node.id} ext={ext} nodes={nodes} onPatch={patchNode} /> : null
               })()}
+              {node.type === 'serverNode' && <ServerParamRow nodeId={node.id} nodes={nodes} onPatch={patchNode} />}
               {!isLast && <div className="mt-4 border-t border-zinc-800/60" />}
             </div>
           )

@@ -30,13 +30,14 @@ import AddToSceneNode   from './nodes/AddToSceneNode'
 import Load3DMeshNode   from './nodes/Load3DMeshNode'
 import PreviewImageNode from './nodes/PreviewImageNode'
 import WaitNode         from './nodes/WaitNode'
+import ServerNode       from './nodes/ServerNode'
 import WorkflowEdge     from './nodes/WorkflowEdge'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DRAG_KEY      = 'modly/extension-id'
 const DRAG_NODE_KEY = 'modly/node-type'
-const NODE_TYPES = { extensionNode: ExtensionNode, imageNode: ImageNode, textNode: TextNode, outputNode: AddToSceneNode, meshNode: Load3DMeshNode, previewNode: PreviewImageNode, waitNode: WaitNode }
+const NODE_TYPES = { extensionNode: ExtensionNode, imageNode: ImageNode, textNode: TextNode, outputNode: AddToSceneNode, meshNode: Load3DMeshNode, previewNode: PreviewImageNode, waitNode: WaitNode, serverNode: ServerNode }
 const EDGE_TYPES = { workflowEdge: WorkflowEdge }
 
 const DEFAULT_EDGE_OPTS = { type: 'workflowEdge' }
@@ -156,6 +157,7 @@ const PANEL_BUILTIN_NODES = [
   { type: 'imageNode',   label: 'Image',         color: '#38bdf8', icon: <><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></> },
   { type: 'textNode',    label: 'Text',           color: '#fbbf24', icon: <><path d="M17 6.1H3M21 12.1H3M15.1 18H3"/></> },
   { type: 'meshNode',    label: 'Load 3D Mesh',   color: '#a78bfa', icon: <><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></> },
+  { type: 'serverNode',  label: 'Server',         color: '#a78bfa', icon: <><rect x="2" y="3" width="20" height="7" rx="1.5"/><rect x="2" y="14" width="20" height="7" rx="1.5"/><circle cx="6.5" cy="6.5" r="0.8" fill="#a78bfa" stroke="none"/><circle cx="6.5" cy="17.5" r="0.8" fill="#a78bfa" stroke="none"/></> },
   { type: 'outputNode',  label: 'Add to Scene',   color: '#a78bfa', icon: <><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></> },
   { type: 'previewNode', label: 'Preview Views',  color: '#38bdf8', icon: <><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></> },
   { type: 'waitNode',    label: 'Wait',           color: '#71717a', icon: <><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></> },
@@ -400,6 +402,7 @@ const BUILTIN_NODES = [
   { type: 'imageNode',   label: 'Image',         color: '#38bdf8', description: 'Image input' },
   { type: 'textNode',    label: 'Text',           color: '#fbbf24', description: 'Text input' },
   { type: 'meshNode',    label: 'Load 3D Mesh',   color: '#a78bfa', description: 'Load a 3D mesh file or use current model' },
+  { type: 'serverNode',  label: 'Server',         color: '#a78bfa', description: 'Generates a mesh from an image via the local server, picking which model it runs' },
   { type: 'outputNode',  label: 'Add to Scene',   color: '#a78bfa', description: 'Output node — adds the mesh to the 3D scene' },
   { type: 'previewNode', label: 'Preview Views',  color: '#38bdf8', description: 'Displays multi-view image outputs in a 2×3 grid' },
   { type: 'waitNode',    label: 'Wait',           color: '#71717a', description: 'Pauses the workflow until you click Continue' },
@@ -744,9 +747,10 @@ function HelpModal({ onClose }: { onClose: () => void }) {
 
 function getNodeOutputType(node: Node | undefined, allExts: WorkflowExtension[]): string | undefined {
   if (!node) return undefined
-  if (node.type === 'imageNode') return 'image'
-  if (node.type === 'meshNode')  return 'mesh'
-  if (node.type === 'textNode')  return 'text'
+  if (node.type === 'imageNode')  return 'image'
+  if (node.type === 'meshNode')   return 'mesh'
+  if (node.type === 'textNode')   return 'text'
+  if (node.type === 'serverNode') return 'mesh'
   return allExts.find((e) => e.id === (node.data as WFNodeData)?.extensionId)?.output
 }
 
@@ -758,6 +762,7 @@ function getNodeInputType(
   if (!node) return undefined
   if (node.type === 'outputNode')  return 'mesh'
   if (node.type === 'previewNode') return 'image'
+  if (node.type === 'serverNode')  return 'image'
   const ext = allExts.find((e) => e.id === (node.data as WFNodeData)?.extensionId)
   if (ext?.inputs && ext.inputs.length > 1 && targetHandle) {
     const idx = parseInt(targetHandle.replace('input-', ''), 10)
@@ -1189,7 +1194,10 @@ function WorkflowCanvasInner({
       <div className="flex-1 relative" onDragOver={onDragOver} onDrop={onDrop}>
 
         {/* No model node warning */}
-        {!nodes.some((n) => n.type === 'extensionNode' && allExtensions.find((e) => e.id === (n.data as WFNodeData).extensionId && e.type === 'model')) && (
+        {!nodes.some((n) =>
+          n.type === 'serverNode' ||
+          (n.type === 'extensionNode' && allExtensions.find((e) => e.id === (n.data as WFNodeData).extensionId && e.type === 'model')),
+        ) && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-10 pointer-events-none">
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-accent/10 border border-accent/20 text-accent-light whitespace-nowrap">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" className="shrink-0">

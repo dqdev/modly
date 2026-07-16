@@ -18,9 +18,9 @@ else
   exit 1
 fi
 
-export MODELS_DIR="${MODELS_DIR:-$HOME/.modly/models}"
-export WORKSPACE_DIR="${WORKSPACE_DIR:-$HOME/.modly/workspace}"
-export EXTENSIONS_DIR="${EXTENSIONS_DIR:-$HOME/.modly/extensions}"
+export MODELS_DIR="${MODELS_DIR:-$PWD/.modly/models}"
+export WORKSPACE_DIR="${WORKSPACE_DIR:-$PWD/.modly/workspace}"
+export EXTENSIONS_DIR="${EXTENSIONS_DIR:-$PWD/.modly/extensions}"
 mkdir -p "$MODELS_DIR" "$WORKSPACE_DIR" "$EXTENSIONS_DIR"
 
 HOST="${MODLY_API_HOST:-0.0.0.0}"

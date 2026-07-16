@@ -16,6 +16,7 @@ function nodeLabel(node: WFNode, allExtensions: WorkflowExtension[]): string {
   if (node.type === 'meshNode') return 'Load 3D Mesh'
   if (node.type === 'outputNode') return 'Add to Scene'
   if (node.type === 'previewNode') return 'Preview Views'
+  if (node.type === 'serverNode') return 'Server'
   if (node.type === 'extensionNode') {
     return getWorkflowExtension(node.data.extensionId ?? '', allExtensions)?.name ?? 'Extension'
   }
@@ -39,6 +40,7 @@ function getNodeOutputType(node: WFNode, allExtensions: WorkflowExtension[]): Da
   if (node.type === 'textNode') return 'text'
   if (node.type === 'meshNode' || node.type === 'outputNode') return 'mesh'
   if (node.type === 'previewNode') return 'image'
+  if (node.type === 'serverNode') return 'mesh'
   if (node.type === 'extensionNode') {
     return getWorkflowExtension(node.data.extensionId ?? '', allExtensions)?.output
   }
@@ -88,6 +90,26 @@ export function validateWorkflowPreflight(
         nodeId: node.id,
         message: `${nodeLabel(node, allExtensions)} merges two Wait branches, which isn't supported. Route it through a single Wait.`,
       })
+    }
+
+    if (node.type === 'serverNode') {
+      if (!node.data.params?.modelId) {
+        pushIssue(issues, {
+          key: `${node.id}:no-model`,
+          nodeId: node.id,
+          message: `${nodeLabel(node, allExtensions)} has no model selected.`,
+        })
+      }
+      const incomingEdges = workflow.edges.filter((edge) => edge.target === node.id)
+      const hasImageInput = incomingEdges.some((edge) => outputTypes.get(edge.source) === 'image')
+      if (!hasImageInput) {
+        pushIssue(issues, {
+          key: `${node.id}:missing:image`,
+          nodeId: node.id,
+          message: `${nodeLabel(node, allExtensions)} needs an incoming image connection.`,
+        })
+      }
+      continue
     }
 
     if (node.type !== 'extensionNode') continue

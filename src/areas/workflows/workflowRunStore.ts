@@ -121,13 +121,69 @@ function identifyBranches(workflow: Workflow): {
   for (const w of waitIds) branches.set(w, [])
   const preExecExtNodes: WFNode[] = []
   for (const node of ordered) {
-    if (node.type !== 'extensionNode' || !node.data.enabled) continue
+    if ((node.type !== 'extensionNode' && node.type !== 'serverNode') || !node.data.enabled) continue
     const owner = branchOwner.get(node.id)
     if (owner) branches.get(owner)!.push(node)
     else preExecExtNodes.push(node)
   }
 
   return { preExecExtNodes, branches, waitIds, parentWait, ordered }
+}
+
+// ─── Model generation job (shared by ExtensionNode's model branch and ServerNode) ──
+// Submits an image to /generate/from-image and polls /generate/status until it
+// finishes, returning the local absolute path of the resulting mesh.
+
+async function runModelJob(
+  client:       AxiosInstance,
+  modelId:      string,
+  imageBlob:    Blob,
+  filename:     string,
+  params:       Record<string, unknown>,
+  workspaceDir: string,
+  setRunState:  (updater: (s: WorkflowRunState) => WorkflowRunState) => void,
+  startStep:    string,
+): Promise<string> {
+  const fd = new FormData()
+  fd.append('image', imageBlob, filename)
+  fd.append('model_id', modelId)
+  fd.append('collection', 'Workflows')
+  fd.append('remesh', 'none')
+  fd.append('enable_texture', 'false')
+  fd.append('texture_resolution', '1024')
+  fd.append('params', JSON.stringify(params))
+
+  setRunState((s) => ({ ...s, blockProgress: 5, blockStep: startStep }))
+
+  const { data } = await client.post<{ job_id: string }>(
+    '/generate/from-image', fd,
+    { headers: { 'Content-Type': 'multipart/form-data' } },
+  )
+  _activeJobId.current = data.job_id
+
+  while (true) {
+    if (_cancel.current) {
+      await client.post(`/generate/cancel/${_activeJobId.current}`).catch(() => {})
+      _activeJobId.current = null
+      throw new Error('Cancelled')
+    }
+    await new Promise((r) => setTimeout(r, 1200))
+
+    const { data: st } = await client.get<{
+      status: string; progress?: number; step?: string; output_url?: string; error?: string
+    }>(`/generate/status/${_activeJobId.current}`)
+
+    if (st.status === 'done' && st.output_url) {
+      const rel = st.output_url.replace(/^\/workspace\//, '')
+      _activeJobId.current = null
+      setRunState((s) => ({ ...s, blockProgress: 100, blockStep: 'Generation complete' }))
+      return `${workspaceDir}/${rel}`
+    }
+    if (st.status === 'error') throw new Error(st.error ?? 'Generation failed')
+
+    setRunState((s) => ({ ...s, blockProgress: st.progress ?? s.blockProgress, blockStep: st.step ?? 'Generating…' }))
+    useAppStore.getState().updateCurrentJob({ status: 'generating', progress: st.progress, step: st.step })
+  }
 }
 
 // ─── Per-node execution ──────────────────────────────────────────────────────
@@ -200,47 +256,10 @@ async function executeExtensionNode(
     )
     const effectiveParams = { ...schemaDefaults, ...(node.data.params ?? {}) }
 
-    const fd = new FormData()
-    fd.append('image', blob, fname)
-    fd.append('model_id', node.data.extensionId ?? '')
-    fd.append('collection', 'Workflows')
-    fd.append('remesh', 'none')
-    fd.append('enable_texture', 'false')
-    fd.append('texture_resolution', '1024')
-    fd.append('params', JSON.stringify({ ...effectiveParams, ...extraParams }))
-
-    setRunState((s) => ({ ...s, blockProgress: 5, blockStep: 'Submitting to model…' }))
-
-    const { data } = await client.post<{ job_id: string }>(
-      '/generate/from-image', fd,
-      { headers: { 'Content-Type': 'multipart/form-data' } },
+    nodeInputPath = await runModelJob(
+      client, node.data.extensionId ?? '', blob, fname,
+      { ...effectiveParams, ...extraParams }, workspaceDir, setRunState, 'Submitting to model…',
     )
-    _activeJobId.current = data.job_id
-
-    while (true) {
-      if (_cancel.current) {
-        await client.post(`/generate/cancel/${_activeJobId.current}`).catch(() => {})
-        _activeJobId.current = null
-        throw new Error('Cancelled')
-      }
-      await new Promise((r) => setTimeout(r, 1200))
-
-      const { data: st } = await client.get<{
-        status: string; progress?: number; step?: string; output_url?: string; error?: string
-      }>(`/generate/status/${_activeJobId.current}`)
-
-      if (st.status === 'done' && st.output_url) {
-        const rel = st.output_url.replace(/^\/workspace\//, '')
-        nodeInputPath = `${workspaceDir}/${rel}`
-        _activeJobId.current = null
-        setRunState((s) => ({ ...s, blockProgress: 100, blockStep: 'Generation complete' }))
-        break
-      }
-      if (st.status === 'error') throw new Error(st.error ?? 'Generation failed')
-
-      setRunState((s) => ({ ...s, blockProgress: st.progress ?? s.blockProgress, blockStep: st.step ?? 'Generating…' }))
-      useAppStore.getState().updateCurrentJob({ status: 'generating', progress: st.progress, step: st.step })
-    }
   } else {
     if (ext?.input === 'mesh'  && !nodeInputPath) throw new Error(`${ext.name} needs an incoming mesh connection`)
     if (ext?.input === 'image' && !nodeInputPath) throw new Error(`${ext.name} needs an incoming image connection`)
@@ -269,6 +288,69 @@ async function executeExtensionNode(
     ctx.lastSceneMesh = url   // remember it so finalize() keeps the last-run branch in view
     useAppStore.getState().updateCurrentJob({ status: 'done', progress: 100, outputUrl: url })
   }
+}
+
+// ─── ServerNode execution ──────────────────────────────────────────────────────
+// Same image→mesh flow as a model ExtensionNode, but the model is picked from
+// the node's own dropdown (backed by the local server's model registry) rather
+// than from an installed extension — the server auto-downloads/loads it.
+
+async function executeServerNode(
+  node:        WFNode,
+  ctx:         RunContext,
+  setRunState: (updater: (s: WorkflowRunState) => WorkflowRunState) => void,
+): Promise<void> {
+  const { workflow, client, workspaceDir, nodeOutputs, nodeMap, selectedImagePath, selectedImageData } = ctx
+
+  const resolveSource = (sourceId: string): NodeOutput | undefined => {
+    const realId = resolveDataSource(sourceId, workflow.edges, nodeMap)
+    return realId ? nodeOutputs.get(realId) : undefined
+  }
+
+  let nodeInputPath: string | undefined
+  for (const edge of workflow.edges.filter((e) => e.target === node.id)) {
+    const src = resolveSource(edge.source)
+    if (src?.filePath !== undefined) nodeInputPath = src.filePath
+  }
+
+  const modelId = (node.data.params?.modelId as string | undefined) ?? ''
+  if (!modelId) throw new Error('Server node has no model selected')
+
+  const activeImagePath = nodeInputPath ?? selectedImagePath
+  if (!selectedImageData && (!activeImagePath || activeImagePath.trim().length === 0)) {
+    throw new Error('No input image selected for Server node')
+  }
+  const base64 = selectedImageData && nodeInputPath === undefined
+    ? selectedImageData
+    : await window.electron.fs.readFileBase64(activeImagePath as string)
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+  const blob  = new Blob([bytes], { type: 'image/png' })
+  const fname = activeImagePath?.split(/[\\/]/).pop() ?? 'image.png'
+
+  const modelParams = (node.data.params?.modelParams as Record<string, unknown>) ?? {}
+
+  nodeInputPath = await runModelJob(
+    client, modelId, blob, fname, modelParams, workspaceDir, setRunState, 'Submitting to server…',
+  )
+
+  nodeOutputs.set(node.id, { filePath: nodeInputPath, outputType: 'mesh' })
+
+  const norm = nodeInputPath.replace(/\\/g, '/')
+  if (norm.startsWith(workspaceDir) && reachesSceneOutput(node.id, workflow.edges, nodeMap)) {
+    const url = `/workspace/${norm.slice(workspaceDir.length).replace(/^\//, '')}`
+    ctx.lastSceneMesh = url
+    useAppStore.getState().updateCurrentJob({ status: 'done', progress: 100, outputUrl: url })
+  }
+}
+
+function executeNode(
+  node:        WFNode,
+  ctx:         RunContext,
+  setRunState: (updater: (s: WorkflowRunState) => WorkflowRunState) => void,
+): Promise<void> {
+  return node.type === 'serverNode'
+    ? executeServerNode(node, ctx, setRunState)
+    : executeExtensionNode(node, ctx, setRunState)
 }
 
 // ─── Wait dependency helpers ───────────────────────────────────────────────────
@@ -490,7 +572,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => {
             activeNodeId: node.id,
             runState: { ...s.runState, blockIndex: i, blockProgress: 0, blockStep: 'Starting…' },
           }))
-          await executeExtensionNode(node, ctx, setRunState)
+          await executeNode(node, ctx, setRunState)
         }
 
         if (waitIds.length > 0) {
@@ -594,7 +676,7 @@ export const useWorkflowRunStore = create<WorkflowRunStore>((set, get) => {
             activeNodeId: node.id,
             runState: { ...s.runState, blockIndex: i, blockProgress: 0, blockStep: 'Starting…' },
           }))
-          await executeExtensionNode(node, ctx, setRunState)
+          await executeNode(node, ctx, setRunState)
         }
         finishBranch('done')
       } catch (err) {
