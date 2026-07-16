@@ -140,5 +140,5 @@ export function useApi() {
     return { url: data.url }
   }
 
-  return { generateFromImage, pollJobStatus, cancelJob, getModelStatus, downloadModel, optimizeMesh, smoothMesh, importMesh, transformMesh }
+  return { generateFromImage, pollJobStatus, cancelJob, getModelStatus, getAllModelsStatus, downloadModel, optimizeMesh, smoothMesh, importMesh, transformMesh }
 }
