@@ -98,12 +98,14 @@ export default function ServerNode({ id, data, selected }: { id: string; data: W
 
   // ── Model list ──────────────────────────────────────────────────────────────
   const [models, setModels] = useState<ServerModel[]>([])
+  const [modelsLoaded, setModelsLoaded] = useState(false)
   useEffect(() => {
     if (!apiUrl) return
     let cancelled = false
+    setModelsLoaded(false)
     getAllModelsStatus()
-      .then((list) => { if (!cancelled) setModels(list) })
-      .catch(() => {})
+      .then((list) => { if (!cancelled) { setModels(list); setModelsLoaded(true) } })
+      .catch(() => { if (!cancelled) setModelsLoaded(true) })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiUrl])
@@ -189,7 +191,8 @@ export default function ServerNode({ id, data, selected }: { id: string; data: W
             onChange={(e) => patchParams({ modelId: e.target.value, modelParams: {} })}
             className={`${inputCls} flex-1`}
           >
-            {models.length === 0 && <option value="">Loading…</option>}
+            {!modelsLoaded && <option value="">Loading…</option>}
+            {modelsLoaded && models.length === 0 && <option value="">No models found on server</option>}
             {models.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.name}{m.downloaded ? '' : ' (downloads on run)'}
@@ -197,6 +200,12 @@ export default function ServerNode({ id, data, selected }: { id: string; data: W
             ))}
           </select>
         </div>
+
+        {modelsLoaded && models.length === 0 && (
+          <p className="text-[9px] text-zinc-600 leading-snug">
+            No models found on the server. Install an extension on the server's EXTENSIONS_DIR, then reopen this node.
+          </p>
+        )}
 
         {selectedModel && !selectedModel.downloaded && (
           <p className="text-[9px] text-zinc-600 leading-snug">

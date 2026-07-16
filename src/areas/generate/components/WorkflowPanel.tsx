@@ -452,12 +452,16 @@ function ServerParamRow({ nodeId, nodes, onPatch }: { nodeId: string; nodes: Flo
   const apiUrl = useAppStore((s) => s.apiUrl)
   const { getAllModelsStatus } = useApi()
   const [models, setModels] = useState<{ id: string; name: string; downloaded: boolean }[]>([])
+  const [modelsLoaded, setModelsLoaded] = useState(false)
   const [schema, setSchema] = useState<ParamSchema[]>([])
 
   useEffect(() => {
     if (!apiUrl) return
     let cancelled = false
-    getAllModelsStatus().then((list) => { if (!cancelled) setModels(list) }).catch(() => {})
+    setModelsLoaded(false)
+    getAllModelsStatus()
+      .then((list) => { if (!cancelled) { setModels(list); setModelsLoaded(true) } })
+      .catch(() => { if (!cancelled) setModelsLoaded(true) })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiUrl])
@@ -512,12 +516,18 @@ function ServerParamRow({ nodeId, nodes, onPatch }: { nodeId: string; nodes: Flo
               onChange={(e) => onPatch(nodeId, { params: { ...(data?.params ?? {}), modelId: e.target.value, modelParams: {} } })}
               className={`${inputCls} flex-1`}
             >
-              {models.length === 0 && <option value="">Loading…</option>}
+              {!modelsLoaded && <option value="">Loading…</option>}
+              {modelsLoaded && models.length === 0 && <option value="">No models found on server</option>}
               {models.map((m) => (
                 <option key={m.id} value={m.id}>{m.name}{m.downloaded ? '' : ' (downloads on run)'}</option>
               ))}
             </select>
           </div>
+          {modelsLoaded && models.length === 0 && (
+            <p className="text-[9px] text-zinc-600 leading-snug">
+              No models found on the server. Install an extension on the server's EXTENSIONS_DIR, then reopen this panel.
+            </p>
+          )}
           {selectedModel && !selectedModel.downloaded && (
             <p className="text-[9px] text-zinc-600 leading-snug">
               Not downloaded yet — it will be fetched automatically on first run.

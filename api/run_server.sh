@@ -7,7 +7,8 @@
 # Unlike Electron's PythonBridge, this is not managed/killed by any parent
 # process — run it under systemd, tmux, screen, etc. so it survives logout.
 set -euo pipefail
-cd "$(dirname "$0")"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$PROJECT_DIR/api"
 
 if [ -d ".venv" ]; then
   source .venv/bin/activate
@@ -18,9 +19,9 @@ else
   exit 1
 fi
 
-export MODELS_DIR="${MODELS_DIR:-$PWD/.modly/models}"
-export WORKSPACE_DIR="${WORKSPACE_DIR:-$PWD/.modly/workspace}"
-export EXTENSIONS_DIR="${EXTENSIONS_DIR:-$PWD/.modly/extensions}"
+export MODELS_DIR="${MODELS_DIR:-$PROJECT_DIR/.modly/models}"
+export WORKSPACE_DIR="${WORKSPACE_DIR:-$PROJECT_DIR/.modly/workspace}"
+export EXTENSIONS_DIR="${EXTENSIONS_DIR:-$PROJECT_DIR/.modly/extensions}"
 mkdir -p "$MODELS_DIR" "$WORKSPACE_DIR" "$EXTENSIONS_DIR"
 
 HOST="${MODLY_API_HOST:-0.0.0.0}"
