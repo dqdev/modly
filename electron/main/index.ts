@@ -90,7 +90,10 @@ app.whenReady().then(async () => {
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     const csp = [
       "default-src 'self'",
-      "script-src 'self' 'wasm-unsafe-eval'",
+      // In dev, Vite's React Fast Refresh preamble is an inline <script type="module">
+      // injected into the HTML — 'unsafe-inline' is required for HMR to work. Production
+      // builds have no inline scripts, so the packaged app stays on the strict policy.
+      is.dev ? "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'" : "script-src 'self' 'wasm-unsafe-eval'",
       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "font-src 'self' https://fonts.gstatic.com",
       "img-src 'self' data: blob: file:",

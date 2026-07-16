@@ -4,13 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!--
-      connect-src is intentionally broad here: the real restriction is applied at
-      runtime by Electron's main process (see onHeadersReceived in electron/main/index.ts),
-      which knows the actual configured backend URL (local or a remote PYTHON_API_URL host).
-      Browser CSP enforcement intersects this meta policy with that header policy, so this
-      tag must not list specific hosts or it will clip out whatever the header allows.
+      connect-src and script-src are intentionally broad here: the real restriction is
+      applied at runtime by Electron's main process (see onHeadersReceived in
+      electron/main/index.ts), which knows the actual configured backend URL (local or a
+      remote PYTHON_API_URL host) and whether this is a dev or packaged build. Browser CSP
+      enforcement intersects this meta policy with that header policy, so this tag must stay
+      broad or it will clip out whatever the header allows — script-src needs 'unsafe-inline'
+      here so Vite's React Fast Refresh preamble can run in dev; the header omits it in
+      production, which is what actually blocks inline scripts there.
     -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: file:; connect-src 'self' blob: http: https:; worker-src 'self' blob:" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: file:; connect-src 'self' blob: http: https:; worker-src 'self' blob:" />
     <title>Modly</title>
   </head>
   <body>
