@@ -22,6 +22,7 @@ const processor = async (
 
   // Lazy requires — resolved from the extension's own node_modules
   const { NodeIO }             = require('@gltf-transform/core')
+  const { ALL_EXTENSIONS }     = require('@gltf-transform/extensions')
   const { simplify, weld }     = require('@gltf-transform/functions')
   const { MeshoptSimplifier }  = require('meshoptimizer')
 
@@ -29,7 +30,9 @@ const processor = async (
   await MeshoptSimplifier.ready
 
   context.progress(10, 'Loading mesh…')
-  const io  = new NodeIO()
+  // Generators emit GLBs that declare extensionsRequired (e.g. trimesh writes
+  // EXT_texture_webp); an unregistered required extension is a hard read error.
+  const io  = new NodeIO().registerExtensions(ALL_EXTENSIONS)
   const doc = await io.read(input.filePath)
 
   // Count current triangles across all primitives
